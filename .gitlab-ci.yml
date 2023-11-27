@@ -1,0 +1,89 @@
+variables:
+  GIT_SUBMODULE_STRATEGY: "normal"
+  GIT_SUBMODULE_FORCE_HTTPS: "false"
+  GIT_DEPTH: "3"
+
+
+before_script:
+  - python3 --version
+  - python3 -m venv venv
+  - . venv/bin/activate
+  - python -m pip install --upgrade pip
+  - pip install -e .
+  - pip install -r requirements-dev.txt
+  - export PATH="$PATH:/home/cicd/.local/bin" #needed to use coverage.py
+  - export LC_ALL=en_US.utf-8
+  - export LANG=en_US.utf-8
+
+stages:
+  - analysis
+  - test
+  - deploy
+
+unit_tests:
+  stage: test
+  tags:
+    - almalinux8
+  script:
+    - pytest tests --junitxml tests.xml --cov=. --cov-report xml --cov-report term
+  coverage: "/TOTAL.+ ([0-9]{1,3}%)/"
+  artifacts:
+    when: always
+    paths:
+      - tests.xml
+    reports:
+      junit:
+        - tests.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+
+check_format:
+  stage: analysis
+  tags:
+    - almalinux8
+  variables:
+    PRE_COMMIT_HOME: ${CI_PROJECT_DIR}/.cache/pre-commit
+  cache:
+    paths:
+      - ${PRE_COMMIT_HOME}
+  script:
+    - pre-commit run --all-files
+
+check_mypy:
+  stage: analysis
+  tags:
+    - almalinux8
+  script:
+    - mypy src --junit-xml mypy.xml --install-types --non-interactive
+  artifacts:
+    when: on_failure
+    paths:
+      - mypy.xml
+    reports:
+      junit: mypy.xml
+
+pylint:
+  stage: analysis
+  tags:
+    - almalinux8
+  script:
+    - mkdir ./pylint
+    - pylint --output-format=text src | tee ./pylint/pylint.log || pylint-exit $?
+    - PYLINT_SCORE=$(sed -n 's/^Your code has been rated at \([-0-9.]*\)\/.*/\1/p' ./pylint/pylint.log)
+    - anybadge --label=Pylint --file=pylint/pylint.svg --value=$PYLINT_SCORE 2=red 4=orange 8=yellow 10=green
+    - echo "Pylint score is $PYLINT_SCORE"
+  artifacts:
+    paths:
+      - ./pylint/
+
+publish-pypi:
+  stage: deploy
+  tags:
+    - almalinux8
+  only:
+    - tags
+  script:
+    - pip install build twine
+    - python3 -m build
+    - TWINE_PASSWORD=${CI_JOB_TOKEN} TWINE_USERNAME=gitlab-ci-token python3 -m twine upload --verbose --repository-url ${CI_API_V4_URL}/projects/${SDR_PYPI_REPO}/packages/pypi dist/*

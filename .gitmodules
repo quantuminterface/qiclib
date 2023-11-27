@@ -1,0 +1,3 @@
+[submodule "src/qiclib/packages/grpc/ipe_servicehub_protos"]
+	path = src/qiclib/packages/grpc/ipe_servicehub_protos
+	url = ../ipe_servicehub_protos.git

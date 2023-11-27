@@ -1,0 +1,13 @@
+[MAIN]
+ignore-paths = src/qiclib/packages/grpc/
+py-version = 3.6
+fail-under = 8.0
+
+[FORMAT]
+max-line-length = 120
+
+[MESSAGES CONTROL]
+disable=no-else-return,no-else-continue
+
+[TYPECHECK]
+ignored-modules=scipy.special
