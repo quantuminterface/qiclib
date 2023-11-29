@@ -1,0 +1,14 @@
+{
+    "cells": [
+        {
+            "properties": {
+                "electrical_delay": 0.0,
+                "recording_length": 4e-07,
+                "pi_pulse": 4.2e-08
+            }
+        },
+        {
+            "properties": {
+                "electrical_delay": 0.0,
+                "recording_length": 4e-07,
+                "pi_pul
