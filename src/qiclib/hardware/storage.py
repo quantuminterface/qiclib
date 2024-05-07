@@ -18,6 +18,7 @@ from qiclib.hardware.platform_component import PlatformComponent
 
 from qiclib.packages.servicehub import ServiceHubCall
 import qiclib.packages.grpc.qic_storage_pb2 as proto
+import qiclib.packages.grpc.datatypes_pb2 as dt
 import qiclib.packages.grpc.qic_storage_pb2_grpc as grpc_stub
 
 
@@ -35,7 +36,7 @@ class Storage(PlatformComponent):
         super().__init__(name, connection, controller, qkit_instrument)
         self._stub = grpc_stub.StorageStub(self._conn.channel)
         self._index = index
-        self._component = proto.EndpointIndex(value=self._index)
+        self._component = dt.EndpointIndex(value=self._index)
 
         self._bram = [
             _StorageBRAM(

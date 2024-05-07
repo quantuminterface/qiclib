@@ -22,7 +22,6 @@ and how to encode the instruction into their binary format.
 from abc import abstractmethod
 from typing import Tuple, Union
 from enum import Enum
-import numpy as np
 from .qi_var_definitions import QiOp, QiOpCond
 
 
@@ -683,10 +682,11 @@ class SeqTrigger(SeqUTypeInst):
         module2: int = 0,
         module3: int = 0,
         module4: int = 0,
+        module5: int = 0,
         sync=False,
         reset=False,
     ) -> None:
-        self._trig_indices = [module0, module1, module2, module3, module4]
+        self._trig_indices = [module0, module1, module2, module3, module4, module5]
 
         immediate = 0
         immediate |= (reset & 0x1) << 12
@@ -694,8 +694,9 @@ class SeqTrigger(SeqUTypeInst):
         immediate |= (module0 & 0xF) << 16
         immediate |= (module1 & 0xF) << 20
         immediate |= (module2 & 0xF) << 22
-        immediate |= (module3 & 0xF) << 26
-        immediate |= (module4 & 0xF) << 30
+        immediate |= (module3 & 0x3) << 26
+        immediate |= (module4 & 0x3) << 28
+        immediate |= (module5 & 0x3) << 30
         super().__init__(OpCode=SeqOpCode.TRIGGER, immediate=immediate)
 
     def __str__(self) -> str:

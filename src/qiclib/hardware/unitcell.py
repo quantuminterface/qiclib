@@ -64,12 +64,14 @@ from qiclib.hardware.platform_component import PlatformComponent
 
 from qiclib.packages.servicehub import ServiceHubCall
 import qiclib.packages.grpc.qic_unitcell_pb2 as proto
+import qiclib.packages.grpc.datatypes_pb2 as dt
 import qiclib.packages.grpc.qic_unitcell_pb2_grpc as grpc_stub
 
 from qiclib.hardware.sequencer import Sequencer
 from qiclib.hardware.pulsegen import PulseGen
 from qiclib.hardware.recording import Recording
 from qiclib.hardware.storage import Storage
+from qiclib.hardware.digital_trigger import DigitalTrigger
 
 if TYPE_CHECKING:
     from qiclib.hardware.controller import QiController
@@ -93,7 +95,7 @@ class UnitCell:
 
     """
 
-    def __init__(self, index: int, cells: "UnitCells", info: proto.CellInfo):
+    def __init__(self, index: int, cells: "UnitCells", info: proto.CellInfo):  # type: ignore
         self._index = index
         self._cells = cells
         controller: QiController = cells._qip
@@ -114,6 +116,12 @@ class UnitCell:
         )
         self._storage = Storage(
             f"Cell {index} Storage", connection, controller, index=info.storage
+        )
+        self._digital_trigger = DigitalTrigger(
+            f"Cell {index} Digital Trigger",
+            connection,
+            controller,
+            index=info.digital_trigger,
         )
 
     @property
@@ -158,6 +166,14 @@ class UnitCell:
         return self._storage
 
     @property
+    def digital_trigger(self) -> DigitalTrigger:
+        """Digital trigger capabilities of this digital unit cell.
+
+        Enables manual trigger and trigger-set overrides.
+        """
+        return self._digital_trigger
+
+    @property
     def busy(self) -> bool:
         """If the cell is currently busy.
 
@@ -195,7 +211,7 @@ class UnitCells(PlatformComponent):
 
     @ServiceHubCall(errormsg="Could not obtain digital unit cell information.")
     def _update_cells(self):
-        info = self._stub.GetAllCellInfo(proto.Empty())
+        info = self._stub.GetAllCellInfo(dt.Empty())
         self._cells = []
         for i, cell in enumerate(info.cells):
             self._cells.append(UnitCell(i, self, cell))
@@ -265,18 +281,18 @@ class UnitCells(PlatformComponent):
     @ServiceHubCall
     def busy(self) -> bool:
         """If any of the digital unit cells is currently busy."""
-        return self._stub.GetBusyCells(proto.Empty()).busy
+        return self._stub.GetBusyCells(dt.Empty()).busy
 
     @property
     @ServiceHubCall
     def busy_cells(self) -> List[int]:
         """A list with the indices of all digital unit cells that are currently busy."""
-        return self._stub.GetBusyCells(proto.Empty()).cells
+        return self._stub.GetBusyCells(dt.Empty()).cells
 
     @ServiceHubCall
     def check_status(self, raise_exceptions=True):
         """Check if a converter reported an error and if so, forward it to the user."""
-        response = self._stub.GetConverterStatus(proto.Empty())
+        response = self._stub.GetConverterStatus(dt.Empty())
         status_report = response.report
         status_ok = not response.error
 
@@ -294,12 +310,12 @@ class UnitCells(PlatformComponent):
     @ServiceHubCall
     def get_status_report(self) -> str:
         """Retrieve a status report from the converters."""
-        return self._stub.GetConverterStatus(proto.Empty()).report
+        return self._stub.GetConverterStatus(dt.Empty()).report
 
     @ServiceHubCall
     def clear_status_report(self):
         """Resets the status report so old error messages will be discarded."""
-        self._stub.ClearConverterStatus(proto.Empty())
+        self._stub.ClearConverterStatus(dt.Empty())
 
     @ServiceHubCall
     def run_experiment(

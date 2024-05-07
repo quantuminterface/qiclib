@@ -21,18 +21,30 @@ Here, all important commands write QiPrograms are defined.
 import os
 from abc import abstractmethod
 import json
-from typing import Dict, List, Callable, Optional, Union, Set, Any, Type
+from typing import (
+    Dict,
+    List,
+    Callable,
+    Optional,
+    Union,
+    Set,
+    Any,
+    Type,
+    Iterable,
+)
+from typing_extensions import Protocol
 import functools
 import warnings
 
 import numpy as np
 
 import qiclib.packages.utility as util
-from ..hardware.taskrunner import TaskRunner
-from ..experiment.qicode.data_provider import DataProvider
-from ..experiment.qicode.data_handler import DataHandler
-from .qi_seq_instructions import SequencerInstruction
-from .qi_var_definitions import (
+from qiclib.hardware import digital_trigger
+from qiclib.hardware.taskrunner import TaskRunner
+from qiclib.experiment.qicode.data_provider import DataProvider
+from qiclib.experiment.qicode.data_handler import DataHandler
+from qiclib.code.qi_seq_instructions import SequencerInstruction
+from qiclib.code.qi_var_definitions import (
     _QiVariableBase,
     _QiCalcBase,
     _QiConstValue,
@@ -41,14 +53,14 @@ from .qi_var_definitions import (
     QiVariableSet,
     QiCondition,
 )
-from .qi_pulse import QiPulse
-from .qi_visitor import (
+from qiclib.code.qi_pulse import QiPulse
+from qiclib.code.qi_visitor import (
     QiCMContainedCellVisitor,
     QiResultCollector,
     QiVarInForRange,
 )
-from .qi_prog_builder import QiProgramBuilder
-from .qi_types import (
+from qiclib.code.qi_prog_builder import QiProgramBuilder
+from qiclib.code.qi_types import (
     QiType,
     QiPostTypecheckVisitor,
     QiTypeFallbackVisitor,
@@ -184,6 +196,7 @@ class QiCell:
 
         self.cellID = cellID
         self.manipulation_pulses: List[QiPulse] = []
+        self.digital_trigger_sets: List[digital_trigger.TriggerSet] = []
         self.flux_pulses: List[QiPulse] = []
         self.readout_pulses: List[QiPulse] = []
         self._result_container: Dict[str, QiResult] = {}
@@ -235,6 +248,17 @@ class QiCell:
             raise RuntimeError("Too many pulses in use")
 
         return self.manipulation_pulses.index(pulse) + 1  # index 0 and 15 are reserved
+
+    def add_digital_trigger(self, trig_set: digital_trigger.TriggerSet):
+        if trig_set not in self.digital_trigger_sets:
+            self.digital_trigger_sets.append(trig_set)
+
+        if len(self.digital_trigger_sets) > 3:
+            raise RuntimeError(
+                "Too many digital trigger sets in use (Only three sets are available)"
+            )
+
+        return self.digital_trigger_sets.index(trig_set) + 1  # index 0 is reserved
 
     @property
     def initial_manipulation_frequency(self):
@@ -333,7 +357,7 @@ class QiCell:
         returns a dictionary containing the results as numpy arrays.
 
         When calling this function with a name, i.e., calling :python:`cell.data("result_name")`,
-        returns the whole dictionary.
+        returns the result referenced by :python:`name`
 
         :param name: The name of the data
         :return: A single result, or a dictionary of result names mapped to results.
@@ -409,11 +433,63 @@ class QiCells:
         return len(self.cells)
 
 
+class QiCoupler:
+    def __init__(self, associated_unit_cell: QiCell, coupling_index: int):
+        self.associated_unit_cell = associated_unit_cell
+        self.coupling_index = coupling_index
+        self.coupling_pulses: List[QiPulse] = []
+
+    def add_pulse(self, pulse: QiPulse):
+        self.coupling_pulses.append(pulse)
+        return len(self.coupling_pulses)
+
+
+class QiCouplers:
+    """
+    Declares :py:`count` couplers.
+
+    Couplers are capable of playing flux pulses.
+    In the context of QiCode, flux Pulses are longer but do not have Digital Up-Conversion.
+
+    You can instantiate up to twice the amount of digital Unit Cells.
+
+    .. warning::
+        You must first instantiate Digital Unit Cells before you can instantiate Couplers.
+
+    .. code-block:: python
+
+        with QiJob() as job:
+            q = QiCells(6)
+            c = QiCouplers(12)
+    """
+
+    def __init__(self, count: int):
+        if not isinstance(_QiJobReference, QiJob):
+            raise RuntimeError("QiCouplers can only be used within QiJob description.")
+
+        if len(_QiJobReference.cells) == 0:
+            raise RuntimeError(
+                "No cells in the QiJob found."
+                "Note that couplers must be instantiated after cells."
+            )
+
+        self._couplers = [
+            QiCoupler(_QiJobReference.cells[i // 2], i % 2) for i in range(count)
+        ]
+        _QiJobReference._register_couplers(self._couplers)
+
+    def __getitem__(self, key):
+        return self._couplers[key]
+
+    def __len__(self):
+        return len(self._couplers)
+
+
 class QiSampleCell:
     """QiSampleCell is the representation of a single qubit/cell and its properties.
 
     All necessary parameters to perform experiments can be stored here. For this
-    purpose, the QiSampleCell can be utilized as a dictionary with user-defined keys.
+    purpose, the QiSampleCell can be used as a dictionary with user-defined keys.
     """
 
     def __init__(self, cellID: int, cells_ref: "QiSample"):
@@ -652,6 +728,31 @@ class QiVariableCommand(QiCommand):
         return visitor.visit_variable_command(self, *input)
 
 
+class QiTriggerCommand(Protocol):
+    """
+    Common interface for all commands that can cause a trigger.
+    """
+
+    trigger_index: int
+
+
+class cQiDigitalTrigger(QiCellCommand, QiTriggerCommand):
+    """Command generated by :meth:`DigitalTrigger`"""
+
+    def __init__(self, cell: QiCell, outputs: List[int], length: float):
+        super().__init__(cell)
+        self.cell = cell
+        self.trigger_index = cell.add_digital_trigger(
+            digital_trigger.TriggerSet(
+                duration=length, outputs=outputs, continuous=False
+            )
+        )
+        self.length = length
+
+    def _stringify(self) -> str:
+        return f"DigitalTrigger({self.cell}, {self.trigger_index}, {self.length})"
+
+
 class cQiWait(QiCellCommand):
     """Command generated by :meth:`Wait`"""
 
@@ -680,7 +781,7 @@ class cQiWait(QiCellCommand):
         return f"Wait({self.cell}, {self._length})"
 
 
-class _cQiPlay_base(QiCellCommand):
+class _cQiPlay_base(QiCellCommand, QiTriggerCommand):
     """Base class of Play commands.
     Saves pulses, trigger_index and adds pulse variables to associated variable set
     """
@@ -725,7 +826,15 @@ class cQiPlay(_cQiPlay_base):
 
 
 class cQiPlayFlux(_cQiPlay_base):
-    pass
+    """Command generated by PlayFlux()"""
+
+    def __init__(self, coupler: QiCoupler, pulse: QiPulse) -> None:
+        super().__init__(coupler.associated_unit_cell, pulse)
+        self.coupler = coupler
+        self.trigger_index = coupler.add_pulse(pulse)
+
+    def _stringify(self) -> str:
+        return f"PlayFlux({self.coupler}, {self.pulse._stringify()})"
 
 
 class cQiPlayReadout(_cQiPlay_base):
@@ -1161,6 +1270,7 @@ class Parallel(QiContextManager):
                     cQiRotateFrame,
                     cQiRecording,
                     cQiWait,
+                    cQiDigitalTrigger,
                 ),
             ):
                 raise TypeError("Type not allowed inside Parallel()", command)
@@ -1171,7 +1281,9 @@ class Parallel(QiContextManager):
                 raise RuntimeError("Can not save to state variable inside Parallel")
 
             try:
-                if isinstance(command.length, _QiVariableBase):
+                if hasattr(command, "length") and isinstance(
+                    command.length, _QiVariableBase
+                ):
                     self._associated_variable_set.add(command.length)
             except KeyError:
                 pass  # length was QiCellProperty
@@ -1538,6 +1650,7 @@ class QiJob:
     ):
         self.qi_results: List[QiResult] = []
         self.cells = []
+        self.couplers = []
         self.skip_nco_sync = skip_nco_sync
         self.nco_sync_length = nco_sync_length
 
@@ -1591,6 +1704,12 @@ class QiJob:
             raise RuntimeError("Can only register one set of cells at a QiJob.")
 
         self.cells = cells
+
+    def _register_couplers(self, couplers: List[QiCoupler]):
+        if len(self.couplers) > 0:
+            raise RuntimeError("Can only register one set of couplers at a QiJob.")
+
+        self.couplers = couplers
 
     def _run_analyses(self):
         """
@@ -1696,6 +1815,7 @@ class QiJob:
         sample: Optional[QiSample] = None,
         averages: int = 1,
         cell_map: Optional[List[int]] = None,
+        coupling_map: Optional[List[int]] = None,
         data_collection=None,
         use_taskrunner=False,
     ):
@@ -1703,7 +1823,13 @@ class QiJob:
 
         exp = QiCodeExperiment(
             *self._prepare_experiment_params(
-                controller, sample, averages, cell_map, data_collection, use_taskrunner
+                controller,
+                sample,
+                averages,
+                cell_map,
+                coupling_map,
+                data_collection,
+                use_taskrunner,
             )
         )
 
@@ -1729,6 +1855,7 @@ class QiJob:
         sample: Optional[QiSample] = None,
         averages: int = 1,
         cell_map: Optional[List[int]] = None,
+        coupling_map: Optional[List[int]] = None,
         data_collection=None,
         use_taskrunner=False,
     ):
@@ -1772,6 +1899,9 @@ class QiJob:
                     f" QiSample object, i.e. values between 0 and {len(sample) - 1}."
                 )
 
+        if coupling_map is None:
+            coupling_map = list(range(len(self.couplers)))
+
         # Translate cell_map from sample cells ("cells") to QiController cells
         cell_map = [sample.cell_map[c] for c in cell_map]
 
@@ -1791,10 +1921,12 @@ class QiJob:
         return (
             controller,
             self.cells,
+            self.couplers,
             self._get_sequencer_codes(),
             averages,
             for_range_list,
             cell_map,
+            coupling_map,
             self._var_reg_map,
             data_collection,
             use_taskrunner,
@@ -1806,6 +1938,7 @@ class QiJob:
         sample: Optional[QiSample] = None,
         averages: int = 1,
         cell_map: Optional[List[int]] = None,
+        coupling_map: Optional[List[int]] = None,
         data_collection=None,
         use_taskrunner=False,
     ):
@@ -1815,13 +1948,20 @@ class QiJob:
         :param sample: the QiSample object used for execution of pulses and extracts parameters for the experiment
         :param averages: the number of executions that should be averaged, by default 1
         :param cell_map: A list containing the indices of the cells
+        :param cell_map: A list containing the indices of the couplers
         :param data_collection: the data_collection mode for the result, by default "average"
         :param use_taskrunner: if the execution should be handled by the Taskrunner
             Some advanced schemes and data_collection modes are currently only supported
             by the Taskrunner and not yet by a native control flow.
         """
         exp = self.create_experiment(
-            controller, sample, averages, cell_map, data_collection, use_taskrunner
+            controller,
+            sample,
+            averages,
+            cell_map,
+            coupling_map,
+            data_collection,
+            use_taskrunner,
         )
         exp.run()
 
@@ -1916,6 +2056,16 @@ def PlayReadout(cell: QiCell, pulse: QiPulse):
     _add_cmd_to_job(cQiPlayReadout(cell, pulse))
 
 
+def PlayFlux(coupler: QiCoupler, pulse: QiPulse):
+    """
+    Add Flux Pulse command to cell
+
+    :param coupler: The coupler that plays the pulse
+    :param pulse: The pulse to play
+    """
+    _add_cmd_to_job(cQiPlayFlux(coupler, pulse))
+
+
 def RotateFrame(cell: QiCell, angle: float):
     """Rotates the reference frame of the manipulation pulses played with :python:`Play()`.
     This corresponds to an instantaneous, virtual Z rotation on the Bloch sphere.
@@ -1955,6 +2105,53 @@ def Recording(
     # When True, cQiRecording is added to the readout command
     if rec.follows_readout is False:
         _add_cmd_to_job(rec)
+
+
+def DigitalTrigger(
+    cell: QiCell,
+    length: float,
+    outputs: Iterable[int],
+):
+    """
+    Adds a digital trigger command to the cell.
+
+    Digital triggers are visible at auxiliary outputs and can be used, for example, to trigger external electronics
+    simultaneously to outputting a pulse.
+    The time resolution of digital triggers is 4 ns.
+
+    =======
+    Example
+    =======
+
+    The following QiJob Generates a 12 ns long pulse at digital outputs 3 and 6:
+
+    .. code-block:: python
+
+        with QiJob() as job:
+            q = QiCells(1)
+            DigitalTrigger(q[0], length=12e-9, outputs=(3, 6))
+
+    ===================================================
+    Combining the output of multiple Digital Unit Cells
+    ===================================================
+
+    Each Digital Unit Cell can trigger each output.
+    To combine multiple outputs to multiple inputs, all digital outputs are combined using a logical OR operation.
+
+    ================
+    Delaying outputs
+    ================
+
+    A static delay can be added to each output using
+    :python:`QiController.digital_trigger.set_delay(output_number, delay_in_seconds)`.
+    To add a variable amount of time, use :python:`Wait(cell, duration)` before calling :python:`DigitalTrigger`
+
+    :param cell: The cell that is responsible for the outputting the digital trigger
+    :param length: The duration of the pulse in seconds. Should be a multiple of four ns
+    :param outputs: The outputs to trigger. This can also be an expression like :python:`range(0, 8)`
+        to trigger all outputs.
+    """
+    _add_cmd_to_job(cQiDigitalTrigger(cell, list(outputs), length))
 
 
 def Wait(cell: QiCell, delay: Union[int, float, _QiVariableBase, QiCellProperty]):

@@ -31,6 +31,7 @@ from mocks import (
     recording,
     pulse_gen,
     taskrunner,
+    digital_trigger,
 )
 
 
@@ -43,6 +44,7 @@ from mocks import (
     recording,
     pulse_gen,
     taskrunner,
+    digital_trigger,
 )
 class TestExperiments(unittest.TestCase):
     def test_ExperimentReadout(self):

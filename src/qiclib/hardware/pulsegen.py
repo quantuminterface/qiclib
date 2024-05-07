@@ -90,6 +90,7 @@ from qiclib.hardware.platform_component import (
 import qiclib.packages.utility as util
 from qiclib.packages.servicehub import ServiceHubCall
 import qiclib.packages.grpc.pulsegen_pb2 as proto
+import qiclib.packages.grpc.datatypes_pb2 as dt
 import qiclib.packages.grpc.pulsegen_pb2_grpc as grpc_stub
 
 
@@ -124,7 +125,7 @@ class PulseGen(PlatformComponent):
         super().__init__(name, connection, controller, qkit_instrument)
         self._stub = grpc_stub.PulseGenServiceStub(self._conn.channel)
         self._index = index
-        self._component = proto.EndpointIndex(value=self._index)
+        self._component = dt.EndpointIndex(value=self._index)
 
         # TODO Numbers to appropriate constants
         self._triggerset: List[Optional["TriggerSet"]] = [None]
@@ -417,7 +418,7 @@ class PulseGen(PlatformComponent):
         self._stub.ResetStatusFlags(self._component)
 
     @ServiceHubCall(errormsg="Error obtaining the signal generator status flags")
-    def get_status_flags(self) -> proto.StatusFlags:
+    def get_status_flags(self) -> proto.StatusFlags:  # type: ignore
         """Obtains the status flags of the signal generator.
 
         The following flags will be returned as object properties:

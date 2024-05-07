@@ -1,4 +1,4 @@
-# Copyright © 2017-2023 Quantum Interface (quantuminterface@ipe.kit.edu)
+# Copyright © 2024 Quantum Interface (quantuminterface@ipe.kit.edu)
 # Lukas Scheller, IPE, Karlsruhe Institute of Technology
 #
 # This program is free software: you can redistribute it and/or modify
@@ -15,27 +15,17 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 from unittest import mock
 
-from qiclib.packages.grpc.servicehubcontrol_pb2 import *
 
-
-class MockServicehubControlService:
+class MockDigitalTriggerService:
     def __init__(self, _):
         pass
 
-    def GetServiceHubVersion(self, _):
-        return ServiceHubVersions(
-            servicehub_version="1.0-MOCK", proto_version="0.0", common_version="0.0"
-        )
+    def ClearTriggerSets(self, *args, **kwargs):
+        pass
 
-    def GetPluginList(self, _):
-        return StringVector(str=["TaskRunnerPlugin"])
 
-    def GetEndpointsOfPlugin(self, plugin_name):
-        return StringVector(str=[])
+module = "qiclib.packages.grpc.digital_trigger_pb2_grpc.DigitalTriggerServiceStub"
 
 
 def patch():
-    return mock.patch(
-        "qiclib.packages.grpc.servicehubcontrol_pb2_grpc.ServicehubControlServiceStub",
-        new=MockServicehubControlService,
-    )
+    return mock.patch(module, new=MockDigitalTriggerService)

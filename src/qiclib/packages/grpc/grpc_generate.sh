@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-files="pimc.proto pulsegen.proto recording.proto servicehubcontrol.proto sequencer.proto taskrunner.proto qic_storage.proto qic_unitcell.proto rfdc.proto"
+files="datatypes.proto pimc.proto pulsegen.proto recording.proto servicehubcontrol.proto sequencer.proto taskrunner.proto qic_storage.proto qic_unitcell.proto rfdc.proto pulse_player.proto digital_trigger.proto "
 folder="ipe_servicehub_protos"
 
 set -e
@@ -30,5 +30,4 @@ do
     fi
 done
 
-2to3 ./ -w -n
 python3 -m black --exclude "$folder" ./

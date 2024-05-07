@@ -115,6 +115,7 @@ from qiclib.hardware.platform_component import (
 
 from qiclib.packages.servicehub import ServiceHubCall
 import qiclib.packages.grpc.recording_pb2 as proto
+import qiclib.packages.grpc.datatypes_pb2 as dt
 import qiclib.packages.grpc.recording_pb2_grpc as grpc_stub
 
 
@@ -172,7 +173,7 @@ class Recording(PlatformComponent):
         super().__init__(name, connection, controller, qkit_instrument)
         self._stub = grpc_stub.RecordingStub(self._conn.channel)
         self._index = index
-        self._component = proto.EndpointIndex(value=self._index)
+        self._component = dt.EndpointIndex(value=self._index)
 
     def load_configuration(self, sample, no_warn: bool = False):
         """Load the recording module configuration from a (legacy) sample object.

@@ -18,13 +18,14 @@
 All modules representing a part of the QiController should be derived from it. It also
 includes automatic integration of the component into the Qkit framework.
 """
-from typing import TYPE_CHECKING, Dict, Any, Set
+import abc
+from typing import Dict, Any, Set
 
 from qiclib.packages.qkit_polyfill import QKIT_ENABLED, Instrument, qkit
 from qiclib.packages.servicehub import Connection
 
 
-class PlatformComponent:
+class PlatformComponent(abc.ABC):
     """Base class for components on the QiController.
 
     All QiController platform components share a common constructor

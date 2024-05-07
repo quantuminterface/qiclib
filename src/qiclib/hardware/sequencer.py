@@ -23,6 +23,7 @@ from qiclib.hardware.platform_component import (
 from qiclib.packages.servicehub import ServiceHubCall
 
 import qiclib.packages.grpc.sequencer_pb2 as proto
+import qiclib.packages.grpc.datatypes_pb2 as dt
 import qiclib.packages.grpc.sequencer_pb2_grpc as grpc_stub
 
 
@@ -36,9 +37,7 @@ class _SequencerRegisters:
 
     def get_all(self):
         """Returns a list with all 32bit unsigned int register values."""
-        return self._stub.GetAllRegisters(
-            proto.EndpointIndex(value=self._endpoint)
-        ).list
+        return self._stub.GetAllRegisters(dt.EndpointIndex(value=self._endpoint)).list
 
     def __getitem__(self, index):
         self._check_index(index)
@@ -73,7 +72,7 @@ class Sequencer(PlatformComponent):
         super().__init__(name, connection, controller, qkit_instrument)
         self._stub = grpc_stub.SequencerServiceStub(self._conn.channel)
         self._index = index
-        self._component = proto.EndpointIndex(value=self._index)
+        self._component = dt.EndpointIndex(value=self._index)
         self._registers = _SequencerRegisters(self._index, self._stub)
         self._program_description = "Nothing loaded"
 

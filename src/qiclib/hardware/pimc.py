@@ -31,7 +31,7 @@ connection to the converters is established and working.
 from qiclib.hardware.platform_component import PlatformComponent
 
 from qiclib.packages.servicehub import ServiceHubCall
-import qiclib.packages.grpc.pimc_pb2 as proto
+import qiclib.packages.grpc.datatypes_pb2 as dt
 import qiclib.packages.grpc.pimc_pb2_grpc as grpc_stub
 
 
@@ -64,7 +64,7 @@ class PIMC(PlatformComponent):
         "Please make sure the board is connected."
     )
     def _get_info(self):
-        return self._stub.GetInfo(proto.Empty())
+        return self._stub.GetInfo(dt.Empty())
 
     @property
     def core_version(self) -> int:
@@ -117,7 +117,7 @@ class PIMC(PlatformComponent):
             * busy: bool
                 If the Platform is currently busy.
         """
-        return self._stub.GetStatus(proto.Empty())
+        return self._stub.GetStatus(dt.Empty())
 
     @property
     def is_ready(self):
@@ -137,4 +137,4 @@ class PIMC(PlatformComponent):
     @ServiceHubCall(errormsg="Error resetting the Platform")
     def reset(self):
         """Resets the hardware part of the Platform."""
-        self._stub.SetReset(proto.Empty())
+        self._stub.SetReset(dt.Empty())

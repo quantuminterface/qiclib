@@ -220,6 +220,8 @@ class BaseExperiment:
         self._configure_drive_pulses()
         self._configure_sequences()
         self._configure_taskrunner()
+        self._configure_digital_triggers()
+        self._configure_couplers()
 
     def record(self):
         """Starts the experiment recording and returns the result.
@@ -561,6 +563,12 @@ class BaseExperiment:
         self._built_code_from_sequences(
             {"default": lambda code: None}  # Everything will be added by wrapper
         )
+
+    def _configure_digital_triggers(self):
+        pass
+
+    def _configure_couplers(self):
+        pass
 
     def _configure_taskrunner(self):
         """This method configures the taskrunner for the experiment.

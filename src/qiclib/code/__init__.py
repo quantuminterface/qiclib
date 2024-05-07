@@ -34,10 +34,13 @@ from .qi_jobs import (
     QiResult,
     Play,
     PlayReadout,
+    PlayFlux,
     RotateFrame,
     QiJob,
     QiCells,
     QiCell,
+    QiCoupler,
+    QiCouplers,
     QiSample,
     Recording,
     Wait,
@@ -48,6 +51,7 @@ from .qi_jobs import (
     ForRange,
     Parallel,
     QiGate,
+    DigitalTrigger,
 )
 from .qi_pulse import ShapeLib, QiPulse
 from . import qi_seq_instructions

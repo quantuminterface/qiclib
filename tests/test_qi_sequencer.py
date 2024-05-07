@@ -54,6 +54,7 @@ from qiclib.code.qi_jobs import (
     ForRange,
     QiCells,
     Wait,
+    cQiDigitalTrigger,
 )
 from qiclib.code.qi_jobs import (
     cQiPlay,
@@ -268,6 +269,13 @@ class CellCommandToSeqTest(unittest.TestCase):
 
         self.assertIsInstance(self.sequencer.instruction_list[0], SeqTrigger)
         self.assertIsInstance(self.sequencer.instruction_list[1], SeqWaitImm)
+
+    def test_digital_trigger(self):
+        digital_trigger_cmd = cQiDigitalTrigger(self.cell, outputs=[3], length=12e-9)
+
+        self.sequencer.add_trigger_cmd(digital=digital_trigger_cmd)
+
+        self.assertIsInstance(self.sequencer.instruction_list[0], SeqTrigger)
 
     def test_play_commands_longest_wait(self):
         play_cmd = cQiPlay(self.cell, QiPulse(length=CONTROLLER_CYCLE_TIME * 2))

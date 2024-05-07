@@ -62,6 +62,7 @@ from mocks import (
     servicehub_control,
     unit_cell,
     taskrunner,
+    digital_trigger,
 )
 from mocks.unit_cell import MockUnitCellServiceStub
 

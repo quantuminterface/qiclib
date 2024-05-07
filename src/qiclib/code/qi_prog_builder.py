@@ -384,8 +384,10 @@ class ProgramBuilderVisitor(QiCommandVisitor):
             cQiWait,
             cQiPlay,
             cQiPlayReadout,
+            cQiPlayFlux,
             cQiRotateFrame,
             cQiRecording,
+            cQiDigitalTrigger,
         )
 
         relevant_cells = self.get_relevant_cells(cell_cmd)
@@ -413,8 +415,19 @@ class ProgramBuilderVisitor(QiCommandVisitor):
                     recording=cell_cmd.recording,
                     var_single_cycle=cell_cmd._var_single_cycle_trigger,
                 )
+            elif isinstance(cell_cmd, cQiPlayFlux):
+                if cell_cmd.coupler.coupling_index == 0:
+                    self.cell_seq[cell].add_trigger_cmd(coupling0=cell_cmd)
+                elif cell_cmd.coupler.coupling_index == 1:
+                    self.cell_seq[cell].add_trigger_cmd(coupling1=cell_cmd)
+                else:
+                    raise RuntimeError(
+                        f"Illegal coupling index {cell_cmd.coupler.coupling_index} (must be 0 or 1)"
+                    )
             elif isinstance(cell_cmd, cQiRecording):
                 self.cell_seq[cell].add_trigger_cmd(recording=cell_cmd)
+            elif isinstance(cell_cmd, cQiDigitalTrigger):
+                self.cell_seq[cell].add_trigger_cmd(digital=cell_cmd)
 
     def visit_context_manager(self, context_manager):
         """Context managers are evaluated in respective visit"""

@@ -28,6 +28,7 @@ from qiclib.experiment.rtos_tasks import get_task_source
 
 from qiclib.packages.servicehub import ServiceHubCall
 import qiclib.packages.grpc.taskrunner_pb2 as proto
+import qiclib.packages.grpc.datatypes_pb2 as dt
 import qiclib.packages.grpc.taskrunner_pb2_grpc as grpc_stub
 
 
@@ -52,7 +53,7 @@ class TaskRunner(PlatformComponent):
     )
     def firmware_hash(self):
         """The hash of the current firmware running on the realtime core."""
-        return self._stub.GetStatus(proto.Empty()).firmware_hash
+        return self._stub.GetStatus(dt.Empty()).firmware_hash
 
     @property
     @platform_attribute
@@ -61,7 +62,7 @@ class TaskRunner(PlatformComponent):
     )
     def firmware_build_date(self):
         """Returns the build date of the Taskrunner firmware."""
-        return self._stub.GetStatus(proto.Empty()).build_date
+        return self._stub.GetStatus(dt.Empty()).build_date
 
     @property
     @platform_attribute
@@ -70,50 +71,50 @@ class TaskRunner(PlatformComponent):
     )
     def firmware_build_commit(self):
         """Returns the build commit hash of the Taskrunner firmware."""
-        return self._stub.GetStatus(proto.Empty()).build_commit
+        return self._stub.GetStatus(dt.Empty()).build_commit
 
     @property
     @platform_attribute
     @ServiceHubCall(errormsg="Could not determine the status of the taskrunner")
     def loaded_task(self):
         """The name of the currently loaded task."""
-        return self._stub.GetStatus(proto.Empty()).task_name
+        return self._stub.GetStatus(dt.Empty()).task_name
 
     @property
     @ServiceHubCall(errormsg="Could not determine the progress of the task")
     def task_progress(self):
         """Returns the progress of the task"""
-        return self._stub.GetStatus(proto.Empty()).task_progress
+        return self._stub.GetStatus(dt.Empty()).task_progress
 
     @property
     @ServiceHubCall(errormsg="Could not determine number of available databoxes")
     def databoxes_available(self):
         """Returns the number of available databoxes."""
-        return self._stub.GetStatus(proto.Empty()).databoxes_available
+        return self._stub.GetStatus(dt.Empty()).databoxes_available
 
     @property
     @ServiceHubCall(errormsg="Could not determine state of the taskrunner")
     def busy(self):
         """Returns if the taskrunner is currently busy."""
-        return self._stub.GetTaskState(proto.Empty()).busy
+        return self._stub.GetTaskState(dt.Empty()).busy
 
     @property
     @ServiceHubCall(errormsg="Could not determine if task has finished")
     def task_done(self):
         """Returns if the task has finished."""
-        return self._stub.GetTaskState(proto.Empty()).done
+        return self._stub.GetTaskState(dt.Empty()).done
 
     @property
     @ServiceHubCall(errormsg="Could not determine if task has error messages")
     def task_errormsg_available(self):
         """Returns if task has error messages."""
-        return self._stub.GetTaskState(proto.Empty()).error_msg_available
+        return self._stub.GetTaskState(dt.Empty()).error_msg_available
 
     @property
     @ServiceHubCall(errormsg="Could not determine if error message queue is full")
     def task_errormsg_queue_full(self):
         """Returns if if error message queue is full."""
-        return self._stub.GetTaskState(proto.Empty()).error_msg_queue_full
+        return self._stub.GetTaskState(dt.Empty()).error_msg_queue_full
 
     @ServiceHubCall(errormsg="Failed to start task")
     def start_task(self, loop=False, overwrite=False):
@@ -238,7 +239,7 @@ class TaskRunner(PlatformComponent):
 
         databoxes: List[List[Any]] = []
         last_index = -1
-        for databox_reply in method_call(proto.Empty()):
+        for databox_reply in method_call(dt.Empty()):
             # print databox_reply.index, databox_reply.data[:]
             if last_index != databox_reply.index:
                 # Create new (empty) databox in list
@@ -320,7 +321,7 @@ class TaskRunner(PlatformComponent):
     @ServiceHubCall
     def get_error_messages(self):
         """Retrieves all error messages from the task"""
-        reply = self._stub.GetTaskErrorMessages(proto.Empty())
+        reply = self._stub.GetTaskErrorMessages(dt.Empty())
         return reply.message[:]
 
     def check_task_errors(self):

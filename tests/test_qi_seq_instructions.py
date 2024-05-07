@@ -83,10 +83,8 @@ class InstructionToRISCV(unittest.TestCase):
             self.fail(bin(inst.get_riscv_instruction()) + " != " + bin(expected))
 
     def test_trigger_instruction(self):
-        inst = SeqTrigger(5, 3, 4, 2, 1)
-        expected = (
-            0b01_0010_0100_11_0101_0000_00000_0000010  # uses lower 20 Bits of immediate
-        )
+        inst = SeqTrigger(5, 0, 4, 2, 1, 3)
+        expected = 0b11_01_10_0100_00_0101_00_0000000_0000010
 
         if inst.get_riscv_instruction() != expected:
             self.fail(bin(inst.get_riscv_instruction()) + " != " + bin(expected))

@@ -29,6 +29,11 @@ from qiclib.code.qi_jobs import (
     Parallel,
     cQiRecording,
     cQiSync,
+    cQiDigitalTrigger,
+    cQiPlay,
+    cQiPlayReadout,
+    QiTriggerCommand,
+    cQiPlayFlux,
 )
 import qiclib.packages.utility as util
 from .qi_var_definitions import (
@@ -282,14 +287,6 @@ class Sequencer:
     @property
     def recording_delay(self):
         return util.conv_cycles_to_time(self.RECORDING_MODULE_DELAY_CYCLES)
-
-    @property
-    def readout_active(self):
-        return self._trigger_mods.is_readout_active
-
-    @property
-    def manipulation_active(self):
-        return self._trigger_mods.is_manipulation_active
 
     def add_variable(self, var):
         """Adds variable to sequencer, reserving a register for it"""
@@ -622,7 +619,7 @@ class Sequencer:
 
         var_set = QiVariableSet()
         for pulse_cmd in pulses:
-            if isinstance(pulse_cmd, _cQiPlay_base):
+            if hasattr(pulse_cmd, "length"):
                 if isinstance(pulse_cmd.length, _QiVariableBase):
                     var_set.add(pulse_cmd.length)
 
@@ -665,16 +662,11 @@ class Sequencer:
     def trigger_choke_pulse(self):
         """Adds trigger command choking still running pulse generators."""
         trigger_values = self._trigger_mods.get_trigger_val()
-        choke_pulse = SeqTrigger(
-            trigger_values[0],  # readout
-            trigger_values[1],  # recording
-            trigger_values[2],  # manipulation
-            trigger_values[3],
-        )  # external
+        choke_pulse = SeqTrigger(*trigger_values)
 
         self.add_instruction_to_list(choke_pulse)
 
-    def _check_recording_state(self, recording=None, external=None) -> bool:
+    def _check_recording_state(self, recording=None) -> bool:
         """If recording saves to state variable, add command to save to the defined variable.
         Returns True if saving to state, else returns False"""
         if recording is not None and recording.uses_state:
@@ -691,12 +683,14 @@ class Sequencer:
 
     def add_trigger_cmd(
         self,
-        manipulation=None,
-        readout=None,
-        recording=None,
-        external=None,
-        recording_delay=True,
-        var_single_cycle=False,
+        manipulation: Optional[cQiPlay] = None,
+        readout: Optional[cQiPlayReadout] = None,
+        recording: Optional[cQiRecording] = None,
+        coupling0: Optional[cQiPlayFlux] = None,
+        coupling1: Optional[cQiPlayFlux] = None,
+        digital: Optional[cQiDigitalTrigger] = None,
+        recording_delay: bool = True,
+        var_single_cycle: bool = False,
     ):
         """Adds trigger command to sequencer, depending on the specified pulses.
         The sequencer keeps track of still running pulse generators. If a pulse generator is not choked yet,
@@ -705,20 +699,13 @@ class Sequencer:
         off, because Parallel bodies already implement this duration in the sequence generation.
         """
         trigger_values = self._trigger_mods.get_trigger_val(
-            readout, recording, manipulation, external
+            readout, recording, manipulation, coupling0, coupling1, digital
         )
 
-        self.add_instruction_to_list(
-            SeqTrigger(
-                trigger_values[0],  # readout
-                trigger_values[1],  # recording
-                trigger_values[2],  # manipulation
-                trigger_values[3],
-            )
-        )  # external
+        self.add_instruction_to_list(SeqTrigger(*trigger_values))
 
         length = self._get_length_of_trigger(
-            manipulation, readout, recording, recording_delay=recording_delay
+            manipulation, readout, recording, digital, recording_delay=recording_delay
         )
 
         if isinstance(length, _Register) or var_single_cycle:  # is any pulse variable?
@@ -734,13 +721,13 @@ class Sequencer:
             self._trigger_mods.set_active(readout, None, manipulation, None)
 
             self._check_recording_state(
-                recording, external
+                recording
             )  # add possible state save; var pulse is stopped before saving operation
 
         elif (
             length > 1
             and (recording is None or recording.toggleContinuous is None)
-            and not self._check_recording_state(recording, external)
+            and not self._check_recording_state(recording)
         ):
             self._wait_cycles(
                 length - 1
@@ -1149,61 +1136,86 @@ class _RecordingTrigger(Enum):
         return _RecordingTrigger.SINGLE.value
 
 
+def _get_trigger_index(
+    pulse: Optional[QiTriggerCommand], active_trigger: Union[bool, int]
+) -> int:
+    if pulse is None and active_trigger is False:
+        return 0
+    elif pulse is None and active_trigger:
+        return Sequencer.CHOKE_PULSE_INDEX
+    else:
+        return pulse.trigger_index
+
+
 class _TriggerModules:
     """Class of Sequencer to keep track of running pulse generators."""
 
     READOUT = 0
     RECORDING = 1
     MANIPULATION = 2
-    EXTERNAL = 3
+    COUPLING0 = 3
+    COUPLING1 = 4
+    DIGITAL = 5
 
     def __init__(self) -> None:
         self.reset()
 
     def reset(self):
-        self._trigger_modules_active: List[bool] = [False, False, False, False]
+        self._trigger_modules_active: List[Union[bool, int]] = [False] * 6
 
     @property
-    def is_pulse_active(self):
+    def is_pulse_active(self) -> bool:
         """Return True if any pulse generator is active/running"""
         return any(self._trigger_modules_active)
 
-    @property
-    def is_readout_active(self):
-        return self._trigger_modules_active[_TriggerModules.READOUT]
-
-    @property
-    def is_manipulation_active(self):
-        return self._trigger_modules_active[_TriggerModules.MANIPULATION]
-
-    def set_active(self, readout=None, rec=None, manipulation=None, ext=None):
+    def set_active(
+        self,
+        readout: Optional[Any] = None,
+        rec: Optional[Any] = None,
+        manipulation: Optional[Any] = None,
+        coupling0: Optional[Any] = None,
+        coupling1: Optional[Any] = None,
+        digital: Optional[Any] = None,
+    ):
         """Marks pulse generators of defined pulses as active/running"""
         self._trigger_modules_active[_TriggerModules.READOUT] = readout is not None
         self._trigger_modules_active[_TriggerModules.RECORDING] = rec is not None
         self._trigger_modules_active[_TriggerModules.MANIPULATION] = (
             manipulation is not None
         )
-        self._trigger_modules_active[_TriggerModules.EXTERNAL] = ext is not None
+        self._trigger_modules_active[_TriggerModules.COUPLING0] = coupling0 is not None
+        self._trigger_modules_active[_TriggerModules.COUPLING0] = coupling1 is not None
+        self._trigger_modules_active[_TriggerModules.DIGITAL] = digital is not None
 
-    def _evaluate_pulse(self, pulse, _active_trigger) -> int:
-        if pulse is None and _active_trigger is False:
-            return 0
-        elif pulse is None and _active_trigger:
-            return Sequencer.CHOKE_PULSE_INDEX
-        else:
-            return pulse.trigger_index
-
-    def get_trigger_val(self, readout=None, rec=None, manipulation=None, ext=None):
-        """Returns trigger values for defined pulses. If a pulse is not defined but it's module is marked active/running,
+    def get_trigger_val(
+        self,
+        readout: Optional[cQiPlayReadout] = None,
+        rec: Optional[cQiRecording] = None,
+        manipulation: Optional[cQiPlay] = None,
+        coupling0: Optional[cQiPlay] = None,
+        coupling1: Optional[cQiPlay] = None,
+        digital: Optional[cQiDigitalTrigger] = None,
+    ) -> List[int]:
+        """Returns trigger values for defined pulses.
+        If a pulse is not defined, but its module is marked active/running,
         the index of the choke pulse is returned.
-        After calling the function all pulse generators are marked as inactive/off."""
-        pulse_values = [0, 0, 0, 0]
-        pulse_values[_TriggerModules.READOUT] = self._evaluate_pulse(
-            readout, self._trigger_modules_active[0]
+        After calling the function, all pulse generators are marked as inactive/off."""
+        pulse_values = [0] * 6
+        pulse_values[_TriggerModules.READOUT] = _get_trigger_index(
+            readout, self._trigger_modules_active[_TriggerModules.READOUT]
         )
         pulse_values[_TriggerModules.RECORDING] = _RecordingTrigger.from_recording(rec)
-        pulse_values[_TriggerModules.MANIPULATION] = self._evaluate_pulse(
-            manipulation, self._trigger_modules_active[2]
+        pulse_values[_TriggerModules.MANIPULATION] = _get_trigger_index(
+            manipulation, self._trigger_modules_active[_TriggerModules.MANIPULATION]
+        )
+        pulse_values[_TriggerModules.COUPLING0] = _get_trigger_index(
+            coupling0, self._trigger_modules_active[_TriggerModules.COUPLING0]
+        )
+        pulse_values[_TriggerModules.COUPLING1] = _get_trigger_index(
+            coupling1, self._trigger_modules_active[_TriggerModules.COUPLING1]
+        )
+        pulse_values[_TriggerModules.DIGITAL] = _get_trigger_index(
+            digital, self._trigger_modules_active[_TriggerModules.DIGITAL]
         )
 
         self.reset()  # active pulses are now choked

@@ -16,6 +16,7 @@
 from unittest import mock
 
 from qiclib.packages.grpc.pulsegen_pb2 import *
+from qiclib.packages.grpc.datatypes_pb2 import *
 
 
 class MockPulseGenServiceStub:

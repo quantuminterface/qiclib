@@ -40,7 +40,9 @@ class SequencerCodeBase:
         self.program_counter = 0
         self.pc_dict = pc_dict
 
-    def tr(self, mod0=0, mod1=0, mod2=0, mod3=0, mod4=0, reset=False, sync=False):
+    def tr(
+        self, mod0=0, mod1=0, mod2=0, mod3=0, mod4=0, mod5=0, reset=False, sync=False
+    ):
         """
         Triggers the modules with the given codes.
         Additionally, global triggers can be issued (reset and sync).
@@ -53,13 +55,14 @@ class SequencerCodeBase:
         self._check_trigger(mod2, "mod2")
         self._check_trigger(mod3, "mod3")
         self._check_trigger(mod4, "mod4")
+        self._check_trigger(mod5, "mod5")
 
         if not isinstance(reset, bool) or not isinstance(sync, bool):
             raise ValueError("reset and sync parameter need to be boolean.")
 
-        # Assembler: TR mod0, mod1, mod2, mod3, reset, sync
+        # Assembler: TR mod0, mod1, mod2, mod3, mod4, mod5, reset, sync
         self.assembler.append(
-            f"tr {mod0}, {mod1}, {mod2}, {mod3}, {mod4}, {reset*1}, {sync*1}\n"
+            f"tr {mod0}, {mod1}, {mod2}, {mod3}, {mod4}, {mod5}, {reset*1}, {sync*1}\n"
         )
 
         # Binary:
@@ -73,8 +76,9 @@ class SequencerCodeBase:
         #   16-19 Mod0 Trigger
         #   20-21 Mod1 Trigger
         #   22-25 Mod2 Trigger
-        #   25-29 Mod3 Trigger
-        #   30-31 Mod4 Trigger
+        #   26-27 Mod3 Trigger
+        #   28-29 Mod4 Trigger
+        #   30-31 Mod5 Trigger
         self._add_command_value(
             0b0000010  # opcode TRIGGER
             + (reset << 12)
@@ -83,7 +87,8 @@ class SequencerCodeBase:
             + (mod1 << 20)
             + (mod2 << 22)
             + (mod3 << 26)
-            + (mod4 << 30)
+            + (mod4 << 28)
+            + (mod5 << 30)
         )
 
         return self
@@ -156,19 +161,19 @@ class SequencerCodeBase:
 
         return self
 
-    def tri(self, clock_cycles=1, mod0=0, mod1=0, mod2=0, mod3=0):
+    def tri(self, clock_cycles=1, mod0=0, mod1=0, mod2=0, mod3=0, mod4=0, mod5=0):
         """Triggers the modules with the given codes.
         Then waits the given number of `clock_cycles`.
 
         .. deprecated:: 0.0.2
             New sequencer has two separate commands for trigger (TR) and wait (WTI/WTR).
         """
-        self.tr(mod0, mod1, mod2, mod3)
+        self.tr(mod0, mod1, mod2, mod3, mod4, mod5)
         if clock_cycles > 1:
             self.wti(clock_cycles - 1)
         return self
 
-    def trr(self, reg=1, mod0=0, mod1=0, mod2=0, mod3=0):
+    def trr(self, reg=1, mod0=0, mod1=0, mod2=0, mod3=0, mod4=0, mod5=0):
         """Triggers the modules with the given codes.
         Then waits as long as the delay in the specified register `reg` states, decremented by 1,
         to account for trigger instruction duration.
@@ -176,7 +181,7 @@ class SequencerCodeBase:
         .. deprecated:: 0.0.2
             New sequencer has two separate commands for trigger (TR) and wait (WTI/WTR).
         """
-        self.tr(mod0, mod1, mod2, mod3)
+        self.tr(mod0, mod1, mod2, mod3, mod4, mod5)
         self.twr(reg)
         return self
 
@@ -516,7 +521,14 @@ class SequencerCode(SequencerCodeBase):
     """Class to easily generate code for the QiController sequencer in an object-oriented manner."""
 
     def trigger_immediate(
-        self, delay=0, manipulation=0, readout=0, recording=0, external=0
+        self,
+        delay=0,
+        manipulation=0,
+        readout=0,
+        recording=0,
+        coupling0=0,
+        coupling1=0,
+        digital=0,
     ):
         """Triggers the modules with the given codes. Then waits for *delay* seconds.
 
@@ -524,7 +536,9 @@ class SequencerCode(SequencerCodeBase):
         :param manipulation: The code passed to the manipulation pulse generation module.
         :param readout: The code passed to the readout pulse generation module.
         :param recording: The code passed to the recording module.
-        :param external: The code triggering an optional external module.
+        :param coupling0: The code triggering the associated first coupling module.
+        :param coupling1: The code triggering the associated second coupling module.
+        :param digital: The code for digital output triggers.
         """
         # We always ceil so we get no accidental overlap
         clock_cycles_to_wait = util.conv_time_to_cycles(delay, "ceil")
@@ -533,21 +547,34 @@ class SequencerCode(SequencerCodeBase):
             raise ValueError(
                 "delay must be smaller than 2^12 clock cycles. Try TRR instead."
             )
+        if register < 0 or register >= (1 << 4):
+            raise ValueError("register has to be between 0 and 15.")
         if manipulation < 0 or manipulation >= (1 << 4):
             raise ValueError("manipulation has to be between 0 and 15.")
         if readout < 0 or readout >= (1 << 4):
             raise ValueError("readout has to be between 0 and 15.")
         if recording < 0 or recording >= (1 << 4):
             raise ValueError("recording has to be between 0 and 15.")
-        if external < 0 or external >= (1 << 4):
-            raise ValueError("external has to be between 0 and 15.")
+        if coupling0 < 0 or coupling0 >= (1 << 2):
+            raise ValueError("external has to be between 0 and 3.")
+        if coupling1 < 0 or coupling1 >= (1 << 2):
+            raise ValueError("external has to be between 0 and 3.")
+        if digital < 0 or digital >= (1 << 2):
+            raise ValueError("external has to be between 0 and 3.")
 
         return self.tri(
-            clock_cycles_to_wait, readout, recording, manipulation, external
+            clock_cycles_to_wait, readout, recording, manipulation, coupling0, coupling1
         )
 
     def trigger_registered(
-        self, register, manipulation=0, readout=0, recording=0, external=0
+        self,
+        register,
+        manipulation=0,
+        readout=0,
+        recording=0,
+        coupling0=0,
+        coupling1=0,
+        digital=0,
     ):
         """Triggers the modules with the given codes.
         Then waits as long as the delay in the specified *register* states.
@@ -556,7 +583,9 @@ class SequencerCode(SequencerCodeBase):
         :param manipulation: The code passed to the manipulation pulse generation module.
         :param readout: The code passed to the readout pulse generation module.
         :param recording: The code passed to the recording module.
-        :param external: The code triggering an optional external module.
+        :param coupling0: The code triggering the associated first coupling module.
+        :param coupling1: The code triggering the associated second coupling module.
+        :param digital: The code for digital output triggers.
         """
         if register < 0 or register >= (1 << 4):
             raise ValueError("register has to be between 0 and 15.")
@@ -566,19 +595,35 @@ class SequencerCode(SequencerCodeBase):
             raise ValueError("readout has to be between 0 and 15.")
         if recording < 0 or recording >= (1 << 4):
             raise ValueError("recording has to be between 0 and 15.")
-        if external < 0 or external >= (1 << 4):
-            raise ValueError("external has to be between 0 and 15.")
+        if coupling0 < 0 or coupling0 >= (1 << 2):
+            raise ValueError("external has to be between 0 and 3.")
+        if coupling1 < 0 or coupling1 >= (1 << 2):
+            raise ValueError("external has to be between 0 and 3.")
+        if digital < 0 or digital >= (1 << 2):
+            raise ValueError("external has to be between 0 and 3.")
 
-        return self.trr(register, readout, recording, manipulation, external)
+        return self.trr(
+            register, readout, recording, manipulation, coupling0, coupling1, digital
+        )
 
-    def trigger(self, manipulation=0, readout=0, recording=0, external=0):
+    def trigger(
+        self,
+        manipulation=0,
+        readout=0,
+        recording=0,
+        coupling0=0,
+        coupling1=0,
+        digital=0,
+    ):
         """Triggers the modules with the given codes.
         Then immediately continues with the next instruction (no delay / only 1 cycle).
 
         :param manipulation: The code passed to the manipulation pulse generation module.
         :param readout: The code passed to the readout pulse generation module.
         :param recording: The code passed to the recording module.
-        :param external: The code triggering an optional external module.
+        :param coupling0: The code triggering the associated first coupling module.
+        :param coupling1: The code triggering the associated second coupling module.
+        :param digital: The code for digital output triggers.
         """
         if manipulation < 0 or manipulation >= (1 << 4):
             raise ValueError("manipulation has to be between 0 and 15.")
@@ -586,10 +631,14 @@ class SequencerCode(SequencerCodeBase):
             raise ValueError("readout has to be between 0 and 15.")
         if recording < 0 or recording >= (1 << 4):
             raise ValueError("recording has to be between 0 and 15.")
-        if external < 0 or external >= (1 << 4):
-            raise ValueError("external has to be between 0 and 15.")
+        if coupling0 < 0 or coupling0 >= (1 << 2):
+            raise ValueError("external has to be between 0 and 3.")
+        if coupling1 < 0 or coupling1 >= (1 << 2):
+            raise ValueError("external has to be between 0 and 3.")
+        if digital < 0 or digital >= (1 << 2):
+            raise ValueError("external has to be between 0 and 3.")
 
-        return self.tr(readout, recording, manipulation, external)
+        return self.tr(readout, recording, manipulation, coupling0, coupling1, digital)
 
     def conditional_jump(self, address, state=None):
         """Waits for a previous readout to return its result.

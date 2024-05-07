@@ -26,7 +26,7 @@ from ...hardware.taskrunner import TaskRunner
 from ...experiment.base import BaseExperiment, ExperimentReadout
 from ...packages.constants import CONTROLLER_SAMPLE_FREQUENCY_IN_HZ as samplerate
 from ...packages import utility as util
-from ...code.qi_jobs import QiCell
+from ...code.qi_jobs import QiCell, QiCoupler
 from ...code.qi_sequencer import ForRangeEntry, Sequencer
 from ...code.qi_pulse import QiPulse
 from ...code.qi_var_definitions import _QiVariableBase
@@ -65,21 +65,25 @@ class QiCodeExperiment(BaseExperiment):
         self,
         controller,
         cell_list: List[QiCell],
+        couplers: List[QiCoupler],
         sequencer_codes,
         averages: int = 1,
         for_range_list=[],
         cell_map: Optional[List[int]] = None,
+        coupler_map: Optional[List[int]] = None,
         var_reg_map: Dict[_QiVariableBase, Dict[QiCell, int]] = {},
         data_collection="average",
         use_taskrunner=False,
     ):
         self.cell_list = cell_list
+        self.couplers = couplers
         # The Variables for calculating a parametrized Pulse.
         super().__init__(controller)
         self._seq_instructions = sequencer_codes
         self.averages = averages
         self.for_range_list = for_range_list
         self.cell_map = cell_map
+        self.coupler_map = coupler_map
         self._var_reg_map = var_reg_map
         self._data_collection = data_collection
         self.use_taskrunner = use_taskrunner
@@ -196,6 +200,10 @@ class QiCodeExperiment(BaseExperiment):
         for idx, sample_cell in enumerate(self.cell_list):
             yield idx, sample_cell, self.qic.cell[self.cell_map[idx]]
 
+    def coupling_iterator(self):
+        for idx, coupler in enumerate(self.couplers):
+            yield coupler, self.qic.pulse_players[self.coupler_map[idx]]
+
     def _configure_readout(self, no_warn=False):
         """Overwrites the _configure_readout method of BaseExperiment class.
         Loads readout pulses of a sequence in successive readout triggersets.
@@ -262,6 +270,21 @@ class QiCodeExperiment(BaseExperiment):
                 qic_cell.manipulation.if_frequency = cell.initial_manipulation_frequency
             except AttributeError:
                 pass  # No manipulation pulses present -> just leave the current setting
+
+    def _configure_digital_triggers(self):
+        for _, cell, qic_cell in self.cell_iterator():
+            qic_cell.digital_trigger.clear_trigger_sets()
+            for index, trig_set in enumerate(cell.digital_trigger_sets):
+                # In the array, triggers are indexed starting from 0. However, index 0 is reserved and cannot be used.
+                # Therefore, we start at index # 1. This is also accounted for in QiCell.add_digital_trigger()
+                qic_cell.digital_trigger.set_trigger_set(index + 1, trig_set)
+
+    def _configure_couplers(self):
+        for coupler, pulse_player in self.coupling_iterator():
+            pulse_player.reset()
+            for index, pulse in enumerate(coupler.coupling_pulses):
+                # In the array, triggers are indexed starting from 0. However, index 0 is reserved and cannot be used.
+                pulse_player.pulses[index + 1] = pulse(pulse_player.sample_rate)
 
     def _configure_sequences(self):
         """Overwrites the _configure_sequences method of BaseExperiment class.

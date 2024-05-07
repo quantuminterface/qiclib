@@ -73,6 +73,7 @@ from qiclib.hardware.platform_component import (
     platform_attribute,
     platform_attribute_collector,
 )
+from qiclib.hardware.pulse_player import PulsePlayer
 from qiclib.hardware.pulsegen import PulseGen
 from qiclib.hardware.recording import Recording
 from qiclib.hardware.rfdc import RFDataConverter
@@ -126,10 +127,21 @@ class QiController(PlatformComponent):
         self._rfdc = RFDataConverter("RF Data Converter", connection, self)
         self._cell = UnitCells("UnitCells", connection, self, qkit_instrument=False)
         self._print(f"Firmware with {self.cell.count} digital unit cells detected.")
+
         if self.cell.count == 0:
             raise NotImplementedError(
                 "No digital unit cells found on QiController! "
                 "Please update the board firmware."
+            )
+        self._pulse_players = []
+        for endpoint in self._servicehub.get_endpoints_of_plugin("PulsePlayerPlugin"):
+            index = self._servicehub.get_endpoint_index_from_plugin(
+                "PulsePlayerPlugin", endpoint
+            )
+            self._pulse_players.append(
+                PulsePlayer(
+                    "Pulse Player", connection, self, index, qkit_instrument=False
+                )
             )
 
         # TODO Deprecated, remove in next major version
@@ -215,6 +227,7 @@ class QiController(PlatformComponent):
             0x23: "ZCU111",
             0x38: "ZRF8",
             0x41: "ZCU216",
+            0x51: "ZCU208",
         }.get(self.platform_id)
 
         if self.platform_name is None:
@@ -256,6 +269,17 @@ class QiController(PlatformComponent):
         and can be used to query status information like overvoltage conditions.
         """
         return self._rfdc
+
+    @property
+    def pulse_players(self) -> List[PulsePlayer]:
+        """
+        The pulse players of the platform.
+
+        Each :class:`qiclib.hardware.pulse_player.PulsePlayer`
+        is similar to the `qiclib.hardware.pulse_player.PulseGen` component,
+        however, pulse players do not have digital upconversion but instead  more memory.
+        """
+        return self._pulse_players
 
     @property
     def taskrunner(self) -> Optional[TaskRunner]:

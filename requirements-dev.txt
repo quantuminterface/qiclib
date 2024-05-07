@@ -7,4 +7,5 @@ pytest-cov
 sphinx
 livereload
 pylint==2.13.9
+pylint-exit==1.2.0
 2to3==1.0
