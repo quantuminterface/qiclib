@@ -380,8 +380,8 @@ def crop_recording_window(
             _dw.description = (
                 f"offset = {offset} ns, " + f"recording length = {duration} ns"
             )
-            sample[0]["rec_offset"] = offset * 1e-09
-            sample[0]["rec_length"] = duration * 1e-09
+            sample[cell]["rec_offset"] = offset * 1e-09
+            sample[cell]["rec_length"] = duration * 1e-09
             # return cell
         else:
             plt.figure(figsize=(15, 5))

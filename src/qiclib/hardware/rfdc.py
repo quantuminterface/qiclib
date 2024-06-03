@@ -149,10 +149,10 @@ class DACBlockStatus:
 
 
 class DataConverter(ABC):
-    def __init__(self, stub: grpc_stub.RFdcServiceStub, block: int, tile: int):
+    def __init__(self, stub: grpc_stub.RFdcServiceStub, tile: int, block: int):
         self._stub = stub
-        self.block = block
         self.tile = tile
+        self.block = block
 
     @abstractmethod
     def _endpoint_index(self) -> proto.ConverterIndex:  # type: ignore
@@ -293,23 +293,23 @@ class RFDataConverter(PlatformComponent):
         super().__init__(name, connection, controller, qkit_instrument)
         self._stub = grpc_stub.RFdcServiceStub(self._conn.channel)
 
-    def dac(self, block: int, tile: int) -> DAC:
+    def dac(self, tile: int, block: int) -> DAC:
         """
         Get a reference to a DAC at a certain tile and block index.
 
         Using the returned object, properties of the corresponding DAC can be set
         that will be updated on the QiController.
         """
-        return DAC(self._stub, block, tile)
+        return DAC(self._stub, tile, block)
 
-    def adc(self, block: int, tile: int) -> ADC:
+    def adc(self, tile: int, block: int) -> ADC:
         """
         Get a reference to an ADC ar a certain tile and block index.
 
         Using the returned object, properties of the corresponding ADC can be set
         that will be updated on the QiController.
         """
-        return ADC(self._stub, block, tile)
+        return ADC(self._stub, tile, block)
 
     @ServiceHubCall(errormsg="Could not reset RF data converter status")
     def reset_status(self):

@@ -68,6 +68,8 @@ import json
 from typing import Optional, List
 import warnings
 
+from qiclib.hardware.direct_rf import DirectRf
+from qiclib.hardware.direct_rf_addon import DirectRfAddon
 from qiclib.hardware.platform_component import (
     PlatformComponent,
     platform_attribute,
@@ -143,6 +145,22 @@ class QiController(PlatformComponent):
                     "Pulse Player", connection, self, index, qkit_instrument=False
                 )
             )
+
+        if self._servicehub.has_direct_rf:
+            self._direct_rf_board = DirectRfAddon(
+                "DirectRf Addon Card", connection, self
+            )
+
+            self._direct_rf = DirectRf("Direct RF", connection, self)
+            self._output_channels = [
+                self._direct_rf.output_channel(i) for i in range(16)
+            ]
+            self._input_channels = [self._direct_rf.input_channel(i) for i in range(8)]
+        else:
+            self._direct_rf_board = None
+            self._direct_rf = None
+            self._output_channels = None
+            self._input_channels = None
 
         # TODO Deprecated, remove in next major version
         # Preconfigure some standard values
@@ -337,6 +355,18 @@ class QiController(PlatformComponent):
     def busy(self):
         """If the QiController is currently busy."""
         return self.pimc.is_busy
+
+    @property
+    def output_channels(self):
+        if self._output_channels is None:
+            raise AttributeError("DirectRf not available for this platform")
+        return self._output_channels
+
+    @property
+    def input_channels(self):
+        if self._input_channels is None:
+            raise AttributeError("DirectRf not available for this platform")
+        return self._input_channels
 
     @property
     @platform_attribute
@@ -600,6 +630,12 @@ class QiController(PlatformComponent):
             FutureWarning,
         )
         return self.cell[0].storage
+
+    @property
+    def direct_rf_board(self):
+        if self._direct_rf_board is None:
+            raise AttributeError("DirectRf not available for this platform")
+        return self._direct_rf_board
 
     @property
     def sample(self):

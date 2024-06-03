@@ -63,6 +63,11 @@ class ServiceHub(PlatformComponent):
         """If the Taskrunner is available on the connected platform."""
         return "TaskRunnerPlugin" in self.plugin_list
 
+    @property
+    def has_direct_rf(self) -> bool:
+        """If the DirectRf plugin is available on the connected platform."""
+        return "DirectRfPlugin" in self.plugin_list
+
     def reboot(self):
         """Reboots the whole platform."""
         self._stub.Reboot(dt.Empty())
