@@ -67,7 +67,7 @@ class ServiceHub(PlatformComponent):
     @property
     def has_rfdc(self) -> bool:
         """If the RF Data Converter is available on the connected platform."""
-        return "TaskRunnerPlugin" in self.plugin_list
+        return "RFdcPlugin" in self.plugin_list
 
     @property
     def has_direct_rf(self) -> bool:
