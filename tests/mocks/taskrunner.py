@@ -13,6 +13,8 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+from __future__ import annotations
+
 from unittest import mock
 
 from qiclib.packages.grpc.taskrunner_pb2 import *
@@ -38,7 +40,7 @@ def _get_databoxes(dtype):
     elif not is_64 and not is_signed:
         reply = DataboxReplyUINT32
     else:
-        raise AssertionError()
+        raise AssertionError
     for idx, all_data in _settings.databoxs[dtype].items():
         yield from (reply(data=single, index=idx) for single in all_data)
 
@@ -90,7 +92,7 @@ class MockTaskRunnerServiceStub:
         return _get_databoxes("uint64")
 
 
-def patch(databoxes: dict = None):
+def patch(databoxes: dict | None = None):
     """
     TODO: doc
     """

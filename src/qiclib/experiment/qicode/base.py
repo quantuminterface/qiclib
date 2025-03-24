@@ -13,65 +13,72 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+from __future__ import annotations
+
 import math
 import time
-from typing import Optional, Dict, List, Union, Callable
+from dataclasses import dataclass, fields
+from typing import Callable
+
 import numpy as np
 
-from .data_provider import DataProvider
-from .data_handler import DataHandler
-from ...code.qi_types import QiType
-from ...hardware.pulsegen import TriggerSet
-from ...hardware.taskrunner import TaskRunner
-from ...experiment.base import BaseExperiment, ExperimentReadout
-from ...packages.constants import CONTROLLER_SAMPLE_FREQUENCY_IN_HZ as samplerate
-from ...packages import utility as util
-from ...code.qi_jobs import QiCell, QiCoupler
-from ...code.qi_sequencer import ForRangeEntry, Sequencer
-from ...code.qi_pulse import QiPulse
-from ...code.qi_var_definitions import _QiVariableBase
+from qiclib.code.qi_jobs import QiCell, QiCoupler
+from qiclib.code.qi_pulse import QiPulse
+from qiclib.code.qi_sequencer import ForRangeEntry, Sequencer
+from qiclib.code.qi_types import QiType
+from qiclib.code.qi_var_definitions import _QiVariableBase
+from qiclib.experiment.base import BaseExperiment, ExperimentReadout
+from qiclib.experiment.qicode.data_handler import DataHandler
+from qiclib.experiment.qicode.data_provider import DataProvider
+from qiclib.hardware.controller import QiController
+from qiclib.hardware.pulsegen import TriggerSet
+from qiclib.hardware.taskrunner import TaskRunner
+from qiclib.packages import utility as util
+from qiclib.packages.constants import CONTROLLER_SAMPLE_FREQUENCY_IN_HZ as samplerate
+from qiclib.packages.qkit_polyfill import SampleObject
 
-from ...packages.qkit_polyfill import SampleObject
 
-
+@dataclass
 class _TaskrunnerSettings:
-    def __init__(self, taskfile, taskname, params, data_mode, data_converter):
-        self.task = (taskfile, taskname)
-        self.params = params
-        self.data_mode = data_mode
-        self.data_converter = data_converter
+    taskfile: str
+    taskname: str
+    params: list | None
+    data_mode: TaskRunner.DataMode | str
+    data_converter: Callable[[list], list] | None
 
-    def update(self, new: "_TaskrunnerSettings"):
-        if new.task is not None:
-            self.task = new.task
-        if new.params is not None:
-            self.params = new.params
-        if new.data_mode is not None:
-            self.data_mode = new.data_mode
-        if new.data_converter is not None:
-            self.data_converter = new.data_converter
+    @property
+    def task(self) -> tuple[str, str]:
+        return self.taskfile, self.taskname
+
+    def update(self, other: _TaskrunnerSettings):
+        """
+        Updates these settings with the other settings,
+        replacing all values in `self` that are not `None`.
+        """
+        for field in fields(other):
+            if value := getattr(other, field.name):
+                setattr(self, field.name, value)
 
 
 class QiCodeExperiment(BaseExperiment):
     """Experiment generating Pulses after the pattern of a predefined QiCode instruction List.
 
     :param controller: First parameter is the QiController itself
-    :type controller: qiclib.hardware.controller.QiController
 
     :raises Exception: If more than 16 parameterized pulses are present
     """
 
     def __init__(
         self,
-        controller,
-        cell_list: List[QiCell],
-        couplers: List[QiCoupler],
+        controller: QiController,
+        cell_list: list[QiCell],
+        couplers: list[QiCoupler],
         sequencer_codes,
         averages: int = 1,
         for_range_list=[],
-        cell_map: Optional[List[int]] = None,
-        coupler_map: Optional[List[int]] = None,
-        var_reg_map: Dict[_QiVariableBase, Dict[QiCell, int]] = {},
+        cell_map: list[int] | None = None,
+        coupler_map: list[int] | None = None,
+        var_reg_map: dict[_QiVariableBase, dict[QiCell, int]] = {},
         data_collection="average",
         use_taskrunner=False,
     ):
@@ -87,13 +94,13 @@ class QiCodeExperiment(BaseExperiment):
         self._var_reg_map = var_reg_map
         self._data_collection = data_collection
         self.use_taskrunner = use_taskrunner
-        self._data_handler_factory: Optional[
-            Callable[[DataProvider, List[QiCell], int], DataHandler]
-        ] = None
+        self._data_handler_factory: (
+            Callable[[DataProvider, list[QiCell], int], DataHandler] | None
+        ) = None
 
         self._job_representation = "Unknown QiCodeExperiment"
 
-        self._taskrunner: Optional[_TaskrunnerSettings] = None
+        self._taskrunner: _TaskrunnerSettings | None = None
         self._update_taskrunner_settings_and_data_handler()
 
     def _update_taskrunner_settings_and_data_handler(self):
@@ -112,7 +119,7 @@ class QiCodeExperiment(BaseExperiment):
             # cells to address
             + self.cell_map
             # how many recordings for each cell
-            + list(cell.get_number_of_recordings() for cell in self.cell_list)
+            + [cell.get_number_of_recordings() for cell in self.cell_list]
         )
 
         def converter_pass_through(boxes):
@@ -258,7 +265,6 @@ class QiCodeExperiment(BaseExperiment):
                     pulse,
                     qic_cell.manipulation.triggerset[triggerset + 1],
                 )  # loads manipulation pulses in triggersets
-
                 if pulse.is_variable_length:
                     # special pulse to end a parametrized readout
                     self.load_pulse(
@@ -305,7 +311,7 @@ class QiCodeExperiment(BaseExperiment):
             else:
                 raise NotImplementedError("Taskrunner is not available on this system")
 
-    def init_variable(self, name: str, value: Union[float, int]):
+    def init_variable(self, name: str, value: float | int):
         """
         Initializes a variable to a certain value at any point in the execution cycle.
 
@@ -318,15 +324,15 @@ class QiCodeExperiment(BaseExperiment):
                 q = QiCells(1)
                 hold = QiVariable(int, name="hold")
                 with If(hold == 1):
-                    Play(q[0], QiPulse(length='cw', frequency=30e6))
+                    Play(q[0], QiPulse(length="cw", frequency=30e6))
                 with Else():
-                    Play(q[0], QiPulse(length='off', frequency=30e6))
+                    Play(q[0], QiPulse(length="off", frequency=30e6))
 
             exp = job.create_experiment(qic)
             exp.init_variable("hold", 1)
-            exp.run() # plays a continuous pulse
+            exp.run()  # plays a continuous pulse
             exp.init_variable("hold", 0)
-            exp.run() # stops
+            exp.run()  # stops
 
         :param name: The name of the variable. Is the same name that was used when creating the variable
         :param value: The value of the variable.
@@ -351,9 +357,9 @@ class QiCodeExperiment(BaseExperiment):
                             value
                         )
                     elif var.type == QiType.FREQUENCY:
-                        qic_cell.sequencer.register[
-                            reg
-                        ] = util.conv_freq_to_nco_phase_inc(value)
+                        qic_cell.sequencer.register[reg] = (
+                            util.conv_freq_to_nco_phase_inc(value)
+                        )
                     else:
                         raise RuntimeError(
                             f"Variable {name} is unknown. Is the program not compiled?"
@@ -460,7 +466,7 @@ class QiCodeExperiment(BaseExperiment):
         result = self._record_internal_plugin(
             averages=self.averages,
             cells=self.cell_map,
-            recordings=list(cell.get_number_of_recordings() for cell in self.cell_list),
+            recordings=[cell.get_number_of_recordings() for cell in self.cell_list],
             data_collection=self._data_collection,
         )
 
@@ -484,8 +490,14 @@ class QiCodeExperiment(BaseExperiment):
             fill = envelope[-1] if hold else 0.0
             envelope = np.append(envelope, [fill] * (4 - len(envelope) % 4))
 
-        triggerset.load_pulse(
-            envelope, phase=pulse.phase, hold=hold, shift_phase=pulse.shift_phase
+        # If phase is a constant phase = pulse.phase, otherwise phase = 0
+        if isinstance(pulse.phase, _QiVariableBase):
+            phase = 0
+        else:
+            phase = pulse.phase
+
+        triggerset.load_pulse(  # if const=pulse.phase, dyn =0
+            envelope, hold=hold, shift_phase=pulse.shift_phase, phase=phase
         )
 
     def run(self, start_lo: bool = True):
@@ -608,9 +620,9 @@ class QiCodeExperiment(BaseExperiment):
     def configure_task(
         self,
         file: str,
-        params: List,
-        data_converter: Callable[[List], List],
-        data_handler: Callable[[List[QiCell], DataProvider], None],
+        params: list,
+        data_converter: Callable[[list], list],
+        data_handler: Callable[[list[QiCell], DataProvider], None],
         data_mode=TaskRunner.DataMode.INT32,
     ):
         """Loads custom file for taskrunner

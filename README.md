@@ -1,6 +1,8 @@
 # qiclib Python package
 
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black) [![coverage report](https://gitlab.kit.edu/kit/ipe-sdr/ipe-sdr-dev/software/qup_client/badges/master/coverage.svg)](https://gitlab.kit.edu/kit/ipe-sdr/ipe-sdr-dev/software/qup_client/-/commits/master)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![pipeline status](https://gitlab.kit.edu/kit/ipe-sdr/ipe-sdr-dev/software/qiclib/badges/master/pipeline.svg)](https://gitlab.kit.edu/kit/ipe-sdr/ipe-sdr-dev/software/qiclib/-/commits/master)
+[![coverage report](https://gitlab.kit.edu/kit/ipe-sdr/ipe-sdr-dev/software/qiclib/badges/master/coverage.svg)](https://gitlab.kit.edu/kit/ipe-sdr/ipe-sdr-dev/software/qiclib/-/commits/master)
 
 qiclib is Quantum Interface's official Python client for the QiController.
 
@@ -8,33 +10,66 @@ The QiController is currently developed at the [Institute for Data Processing an
 
 ## Installing
 
-To install the Python package and make it available globally using `import qiclib`, use:
+To install the `qiclib` and make it available system-wide using, use:
 
-```bash
-$ pip install qiclib
+```shell
+pip install qiclib
+```
+
+or
+
+```shell
+uv pip install qiclib
 ```
 
 ## Developing
 
-If you want to be able to make local changes to the source code without the necessity to re-install, please clone the repository locally and install it in editable mode:
+**Important:** This section describes development using the internal, Gitlab based repository, not the public GitHub based mirror.
 
-```bash
-$ pip install -e .
+The recommended development process involves [uv](https://docs.astral.sh/uv/). Install the tool as mentioned in the [documentation](https://docs.astral.sh/uv/getting-started/installation/).
+
+To install, clone this repository and initialize it using `uv`;
+
+```shell
+git clone git@gitlab.kit.edu:kit/ipe-sdr/ipe-sdr-dev/software/qiclib.git --recurse-submodules
+cd qiclib
+uv sync
 ```
 
-NOTE: If you add/remove files in this mode, you will still have to re-run this command.
+You can then refer to the [Testing](#testing) section to verify that the setup is correct.
 
-In order to be able to commit and push changes, you will have to furthermore install the dev dependencies:
+The usage of [pre-commit](https://pre-commit.com) is recommended and you can install it using
 
-```bash
-$ pip install -r requirements-dev.txt
+```shell
+uvx pre-commit install
 ```
 
-and then install the `pre-commit` hook before committing:
+### Visual Studio Code
 
-```bash
-$ pre-commit install
+This repository includes settings and recommended extensions for [VSCode](https://code.visualstudio.com). If you open this repository using VSCode for the first time, a popup will appear on the bottom-right corner asking for permission to install recommended extensions.
+If you want to inspect these recommendations or have accidentally discarded the notification, go to the Notifications tab and search for `@recommended`.
+
+## Using jupyter
+
+If you have installed `qiclib` system-wide, or in a virtual environment, you can import `qiclib` simply by calling `import qiclib`.
+Example notebooks can be found in the [examples](./examples/) subdirectory.
+
+### Development with jupyter
+
+By default, `uv sync` will also install jupyter so no further setup is required.
+
+It is recommended to store notebooks in the [Notebooks](./Notebooks/) folder that are used for development and testing purposes exclusively.
+This folder is ignored in `git`, but uses the same virtual environment as `qiclib`.
+
+## Testing
+
+Run
+
+```shell
+uv run pytest
 ```
+
+to run all unittests
 
 ## Getting Started
 
@@ -226,14 +261,6 @@ m.measure_1D_AWG(iterations=1)
 ```
 
 Everything else is handled for you by Qkit and qiclib! Have fun performing your experiments.
-
-## Testing
-
-To execute test files use the command:
-
-```shell
-$ pytest tests --cov
-```
 
 ## Contributing
 

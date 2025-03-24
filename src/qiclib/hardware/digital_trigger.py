@@ -13,26 +13,23 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
 
-from typing import List
-from typing_extensions import Literal, TypeAlias
-
+import qiclib.packages.grpc.datatypes_pb2 as dt
+import qiclib.packages.grpc.digital_trigger_pb2 as proto
+import qiclib.packages.grpc.digital_trigger_pb2_grpc as grpc_stub
 import qiclib.packages.utility
 from qiclib.hardware.platform_component import (
     PlatformComponent,
     platform_attribute_collector,
 )
-import qiclib.packages.grpc.digital_trigger_pb2_grpc as grpc_stub
-import qiclib.packages.grpc.datatypes_pb2 as dt
-import qiclib.packages.grpc.digital_trigger_pb2 as proto
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from qiclib.packages.servicehub import Connection
     from qiclib import QiController
+    from qiclib.packages.servicehub import Connection
 
 
 @dataclass
@@ -45,7 +42,7 @@ class TriggerSet:
     """
     How long (in seconds) to hold the output for
     """
-    outputs: List[int]
+    outputs: list[int]
     """
     The indices of the outputs to trigger
     """
@@ -56,7 +53,7 @@ class TriggerSet:
     """
 
 
-OutputLevel: TypeAlias = Literal["active_low", "active_high"]
+OutputLevel = Literal["active_low", "active_high"]
 
 
 @dataclass
@@ -82,15 +79,15 @@ class DigitalTrigger(PlatformComponent):
     def __init__(
         self,
         name: str,
-        connection: "Connection",
-        controller: "QiController",
+        connection: Connection,
+        controller: QiController,
         qkit_instrument: bool = True,
         index: int = 0,
     ):
         super().__init__(name, connection, controller, qkit_instrument)
         self._index = index
         self._stub = grpc_stub.DigitalTriggerServiceStub(self._conn.channel)
-        self._trigger_sets: List[TriggerSet] = []
+        self._trigger_sets: list[TriggerSet] = []
 
     def _endpoint_index(self):
         return dt.EndpointIndex(value=self._index)

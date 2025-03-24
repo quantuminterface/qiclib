@@ -14,17 +14,23 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """Module providing methods to calibrate the readout with the QiController."""
+
+from __future__ import annotations
+
 import sys
-from typing import Optional, List
-from math import floor, log2
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from qiclib.code import *  # pylint: disable=unused-wildcard-import, wildcard-import
 import qiclib.packages.utility as util
+from qiclib.code import *  # pylint: disable=unused-wildcard-import, wildcard-import
 from qiclib.experiment.qicode.collection import Readout
+from qiclib.hardware.unitcell import UnitCell
 
-from qiclib import QiController
+from .fit_utils import compute_custom_piecewise_linear_fit
+
+if TYPE_CHECKING:
+    from qiclib import QiController
 
 
 def calibrate_readout(
@@ -33,7 +39,7 @@ def calibrate_readout(
     averages: int,
     make_plots: bool = True,
     set_sample: bool = True,
-    shift_offset: bool = False,
+    signal_strength: bool = True,
     reset_phase: bool = False,
     phase_avgs: int = 5000,
     trace_avgs: int = 1000,
@@ -46,9 +52,10 @@ def calibrate_readout(
     :param averages: The number of averages
     :param make_plots: If plots should be made
     :param set_sample: If the sample should be set automatically
-    :param shift_offset: If the offset should be optimized
+    :param signal_strength: If the recorded signal should be optimized
     :param reset_phase: If a phase reset should be made (not possible in interferometer mode)
-    :param phase_avgs: number of averagis for phase measurement
+    :param phase_avgs: number of averages for phase measurement
+    :param trace_avgs: number of averages for the plot, if plotting is set to `True`
     :param cell: The Index of the cell to use from the sample object
 
     :return: the offset with maximum electrical delay
@@ -56,24 +63,20 @@ def calibrate_readout(
 
     qic_cell = sample[cell](qic)
 
-    if shift_offset:
-        # Reset to 0 at the beginning, otherwise leave untouched
-        qic_cell.recording.value_shift_offset = 0
-
     if qic_cell.recording.interferometer_mode:
         raise NotImplementedError("Interferometer mode is currently not supported")
         # _init_interferometer_readout(sample, averages, set_sample, make_plots, cell)
 
     # calibrate electrical delay
-    max_offset = calibrate_electrical_delay(
+    max_offset = calibrate_electrical_delay(  # electrical delay call
         qic, sample, averages, make_plots, set_sample, cell
     )
     # check sideband
     check_sidebands(qic, sample, averages, cell)
 
     # Shift offset
-    if shift_offset:
-        optimize_value_shift(qic, sample, averages, set_sample, cell)
+    if signal_strength:
+        optimize_signal_strength(qic, sample, averages, cell)
 
     # reset phase
     if reset_phase:
@@ -110,9 +113,9 @@ def calibrate_electrical_delay(
 
     :param qic: The QiController instance
     :param sample: Sample object containing qubit and setup properties
+    :param averages: The number of averages used to run the measurement
     :param make_plots: Whether plots should be made
     :param set_sample: Whether the sample should be set automatically
-    :param shift_offset: Whether the offset should be optimized
     :param cell: The Index of the cell to use from the sample object, by default 0
 
     :return: the offset with maximum electrical delay
@@ -125,13 +128,19 @@ def calibrate_electrical_delay(
                 q[0], QiPulse(q[0]["rec_pulse"], frequency=q[0]["rec_frequency"])
             )
             Recording(q[0], q[0]["rec_length"], offset, save_to="result")
-            Wait(q[0], 2e-6)  # Give the resonator excitation some time to decay
+            Wait(q[0], 2e-6)
 
-    calib_offset.run(qic, sample, averages=averages)
-
+    calib_offset.run(qic, sample, cell_map=[cell], averages=averages)
     data = calib_offset.cells[0].data("result")
     amplitude = np.abs(data[0] + 1j * data[1])
-    max_offset = 4e-9 * np.argmax(amplitude)
+    offsets = 4e-9 * np.arange(len(amplitude))
+
+    fit_params = compute_custom_piecewise_linear_fit(offsets, amplitude)
+    if fit_params is not None:
+        t1, t2, A1, A2 = fit_params
+        max_offset = t1
+    else:
+        max_offset = None
 
     # plot electrical delay
     if make_plots:
@@ -144,14 +153,12 @@ def calibrate_electrical_delay(
         plt.ylabel("Signal amplitude (arb. unit)")
         plt.show()
 
-    # Check that there is a valid signal coming back at all
-    if 0.7 * np.max(amplitude) < np.mean(amplitude) or np.max(amplitude) < 10:
+    if 0.7 * np.max(amplitude) < np.min(amplitude) or np.max(amplitude) < 10:
         raise ValueError(
             "No clear signal could be detected. Are you sure that everything is"
             " connected right?"
         )
 
-    # Update the Trigger Offset
     print(f"Optimal offset: {max_offset*1e9:.1f} ns")
     if set_sample:
         sample[cell]["rec_offset"] = max_offset
@@ -243,13 +250,17 @@ def calibrate_readout_phase(
     return pha_calib
 
 
-def optimize_value_shift(
-    qic: QiController, sample: QiSample, averages: int, set_sample=False, cell: int = 0
-) -> float:
+def optimize_signal_strength(
+    qic: QiController,
+    sample: QiSample,
+    averages: int,
+    cell: int = 0,
+    buffer: float = 0.1,
+) -> int:
     """Signals are processed with 16bit precision by the platform. When integrating the
     incoming signals after down-conversion, the integration can exceed these value
     range. Therefore, the values are shifted to always stay within a valid range.
-    For small ADC input signals, this can result in low signal strenghts.
+    For small ADC input signals, this can result in low signal strengths.
     To correct this, the value shift can be reduced. This method calculates the optimal
     value shift offset and sets it in the recording module.
 
@@ -259,48 +270,42 @@ def optimize_value_shift(
     :param qic: The QiController instance
     :param sample: Sample object containing qubit and setup properties
     :param averages: The number of averages to perform in order to determine the optimal value shift
-    :param set_sample: If the sample should be updated with the new value
     :param cell: The index of the cell that should be used from sample
+    :param buffer: Safety buffer. For example, 0.1 means to use 10% more than measured
 
     :return: The optimized value shift offset
     """
-    qic_cell = sample[cell](qic)
-    qic_cell.recording.value_shift_offset = 0
-    # TODO Depending on SNR it might be more meaningful to measure many single-shot
-    # results and normalize for them -> if noise is dominant it might cause spikes
-    # much higher than the actual signal amplitude of the averaged result
+    qic_cell: UnitCell = sample[cell](qic)
+    # Reset to highest possible value
+    qic_cell.recording.expected_highest_signal_amplitude = 2**15 - 1
     with QiJob() as job:
         q = QiCells(1)
         Readout(q[0], save_to="result")
         Wait(q[0], 2e-6)
-    job.run(qic, sample, cell_map=[cell], averages=averages, data_collection="amp_pha")
-    [amplitude], _ = np.abs(job.cells[0].data("result"))
-    # Update the Value Shift Offset
-    # 15 + log2(0.8) is bit count of 80% of the maximum possible value (2^15)
-    # log2(max(amplitudes)) is the number of bits the amplitude currently needs
-    # by flooring the difference we end up with a value between 40% and 80% of
-    # the maximum possible range
-    shift_offset = floor(15 + log2(0.8) - log2(amplitude))
-    # No overflow can happen with offset of 0, so we can leave it like this
-    # if really that much of the signal input is used (not realistic in
-    # experiments due to normal noise levels which will clip at the ADCs...)
-    shift_offset = max(shift_offset, 0)
-    qic_cell.recording.value_shift_offset = shift_offset
-    print(f"Value Shift offset set to {shift_offset}")
-    if set_sample:
-        sample[cell]["rec_shift_offset"] = shift_offset
-    return shift_offset
+    job.run(qic, sample, cell_map=[cell], averages=averages, data_collection="iqcloud")
+    ii, qq = np.abs(job.cells[0].data("result"))
+    # TODO: These calculations should be move to the ServiceHub
+    # TODO: Currently, the ServiceHub just outputs some arbitrary values that are dependent on
+    # TODO: the value_factor and the recording length. This makes it hard to compare
+    # TODO: values obtained from recordings with different lengths.
+    max_amplitude = (max(np.max(ii), np.max(qq)) * qic_cell.recording.value_factor) / (
+        sample[cell]["rec_length"] / 4e-9
+    )
+    max_amplitude = int(max_amplitude * (1 + buffer))
+    qic_cell.recording.expected_highest_signal_amplitude = max_amplitude
+    print(f"Expected highest signal amplitude in ADC units: {max_amplitude}")
+    return max_amplitude
 
 
 def record_timetrace(
     qic: QiController,
     sample: QiSample,
     averages: int,
-    duration: Optional[float] = None,
-    offset: Optional[float] = None,
-    pulse_length: Optional[float] = None,
+    duration: float | None = None,
+    offset: float | None = None,
+    pulse_length: float | None = None,
     cell: int = 0,
-) -> List[List[float]]:
+) -> list[list[float]]:
     """performs are readout and gathers the raw data. If the optional parameters are not given
     they will be taken from the sample.
 
@@ -360,8 +365,8 @@ def crop_recording_window(
         cell=cell,
     )
 
-    import matplotlib.pyplot as plt
     import ipywidgets as widgets
+    import matplotlib.pyplot as plt
 
     def pltfunc(start: float, end: float, done: bool):
         """Plots the Raw timetrace of the readout and sets the values

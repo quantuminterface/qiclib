@@ -14,14 +14,14 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-from qiclib.hardware.direct_rf_addon import DacChannel, AdcChannel
-from qiclib.hardware.platform_component import PlatformComponent
-from qiclib.hardware.rfdc import DAC, ADC
+import abc
+from typing import TYPE_CHECKING
+
 import qiclib.packages.grpc.direct_rf_pb2 as dt
 import qiclib.packages.grpc.direct_rf_pb2_grpc as grpc_stub
-import abc
-
-from typing import TYPE_CHECKING
+from qiclib.hardware.direct_rf_addon import AdcChannel, DacChannel
+from qiclib.hardware.platform_component import PlatformComponent
+from qiclib.hardware.rfdc import ADC, DAC
 
 if TYPE_CHECKING:
     from qiclib.hardware.controller import QiController
@@ -56,9 +56,7 @@ class _Channel(abc.ABC):
 
     @attenuation.setter
     def attenuation(self, new_value: float):
-        return self._stub.SetAttenuation(
-            dt.IndexedDouble(index=self._index, value=new_value)
-        )
+        self._stub.SetAttenuation(dt.IndexedDouble(index=self._index, value=new_value))
 
 
 class OutputChannel(_Channel):
@@ -69,8 +67,8 @@ class OutputChannel(_Channel):
         channel: int,
     ) -> None:
         super().__init__(
-            stub,
             controller,
+            stub,
             channel,
             dt.ConverterIndex(index=channel, type=dt.ConverterType.DAC),
         )
@@ -94,8 +92,8 @@ class InputChannel(_Channel):
         channel: int,
     ) -> None:
         super().__init__(
-            stub,
             controller,
+            stub,
             channel,
             dt.ConverterIndex(index=channel, type=dt.ConverterType.ADC),
         )
@@ -119,7 +117,7 @@ class DirectRf(PlatformComponent):
         self._stub = grpc_stub.DirectRfServiceStub(self._conn.channel)
 
     def output_channel(self, number):
-        return OutputChannel(self._stub, self._qip, number)
+        return OutputChannel(self._qip, self._stub, number)
 
     def input_channel(self, number):
-        return InputChannel(self._stub, self._qip, number)
+        return InputChannel(self._qip, self._stub, number)

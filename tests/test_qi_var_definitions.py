@@ -13,21 +13,19 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-import unittest
 from qiclib.code.qi_jobs import (
     QiJob,
     QiVariable,
 )
 
 
-class QiCalcTest(unittest.TestCase):
-    def test_contained_variables(self):
-        with QiJob():
-            x = QiVariable(int)
-            y = QiVariable(int)
-            z = QiVariable(int)
-            a = x + y + z
+def test_contained_variables():
+    with QiJob():
+        x = QiVariable(int)
+        y = QiVariable(int)
+        z = QiVariable(int)
+        a = x + y + z
 
-            self.assertIn(x, a.contained_variables)
-            self.assertIn(y, a.contained_variables)
-            self.assertIn(z, a.contained_variables)
+    assert x in a.contained_variables
+    assert y in a.contained_variables
+    assert z in a.contained_variables

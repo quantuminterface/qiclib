@@ -53,23 +53,27 @@ fifth digital unit cell is accomplished by:
 
 .. code-block:: python
 
-    qic = QiController("ip-address") # Only needed once when initializing the board
-    qic.cell[4].manipulation.triggerset[12].duration = 80e-9 # seconds (80 ns)
+    qic = QiController("ip-address")  # Only needed once when initializing the board
+    qic.cell[4].manipulation.triggerset[12].duration = 80e-9  # seconds (80 ns)
 
 The assignment will then be handled within the :class:`qiclib.hardware.pulsegen.TriggerSet`
-class where it is translated to a remote proceduce call of the
+class where it is translated to a remote procedure call of the
 :class:`qiclib.hardware.pulsegen.PulseGen` class that communicates with the QiController.
 
 """
-import os
-import sys
-from contextlib import suppress
-import json
-from typing import Optional, List
-import warnings
 
+from __future__ import annotations
+
+import json
+import sys
+import warnings
+from contextlib import suppress
+
+import qiclib
+import qiclib.packages.constants as const
 from qiclib.hardware.direct_rf import DirectRf
 from qiclib.hardware.direct_rf_addon import DirectRfAddon
+from qiclib.hardware.pimc import PIMC
 from qiclib.hardware.platform_component import (
     PlatformComponent,
     platform_attribute,
@@ -84,11 +88,8 @@ from qiclib.hardware.servicehub import ServiceHub
 from qiclib.hardware.storage import Storage
 from qiclib.hardware.taskrunner import TaskRunner
 from qiclib.hardware.unitcell import UnitCells
-from qiclib.hardware.pimc import PIMC
-
-from qiclib.packages.servicehub import Connection
 from qiclib.packages.qkit_polyfill import SampleObject
-import qiclib.packages.constants as const
+from qiclib.packages.servicehub import Connection
 
 
 @platform_attribute_collector
@@ -108,7 +109,7 @@ class QiController(PlatformComponent):
 
     def __init__(self, ip: str, port: int = 50058, silent: bool = False):
         self._silent = silent
-        self._detect_driver_version()
+        print(f"qiclib version: {qiclib.__version__}")
 
         # Connection to the Platform
         connection = Connection(ip=ip, port=port, silent=True)
@@ -126,12 +127,15 @@ class QiController(PlatformComponent):
         else:
             self._taskrunner = None
 
-        self._rfdc = RFDataConverter("RF Data Converter", connection, self)
+        if self._servicehub.has_rfdc:
+            self._rfdc = RFDataConverter("RF Data Converter", connection, self)
+        else:
+            self._rfdc = None
         self._cell = UnitCells("UnitCells", connection, self, qkit_instrument=False)
         self._print(f"Firmware with {self.cell.count} digital unit cells detected.")
 
         if self.cell.count == 0:
-            raise NotImplementedError(
+            raise ValueError(
                 "No digital unit cells found on QiController! "
                 "Please update the board firmware."
             )
@@ -175,49 +179,8 @@ class QiController(PlatformComponent):
 
         self._last_qijob = "<Nothing loaded yet>"
 
-    def _detect_driver_version(self):
-        """Detects the version of the drivers and prints it."""
-        self._driver_root_dir = os.path.abspath(
-            os.path.join(os.path.dirname(os.path.realpath(__file__)), "..")
-        )
-        # Store git commit hash of driver repository (to make everything transparent)
-        # It will be stored in every qkit measurement file (if qkit is used)
-        self._driver_version = "undetectable"
-        try:
-            import git
-
-            repo = git.Repo(
-                path=os.path.dirname(os.path.realpath(__file__)),
-                search_parent_directories=True,
-            )
-            committag = next(
-                (tag.name for tag in repo.tags if tag.commit == repo.head.commit), ""
-            )
-            relatedtag, relateddist = next(
-                (
-                    (tag.name, dist + 1)
-                    for dist, commit in enumerate(repo.head.commit.traverse())
-                    for tag in repo.tags
-                    if tag.commit == commit
-                ),
-                "unknown",
-            )
-            commithash = repo.head.object.hexsha[0:8]
-            commitdate = repo.head.object.committed_datetime.strftime("%d.%m.%Y %H:%M")
-            dirty = " <dirty>" if repo.is_dirty() else ""
-
-            tag = committag or relatedtag
-            dist = "" if committag else f" +{relateddist}"
-            self._driver_version = f"{tag}{dist} ({commithash}, {commitdate}){dirty}"
-        except ImportError:
-            self._print_warning(
-                "The gitpython package is needed in order to autodetect "
-                "the git driver version."
-            )
-        except Exception:
-            pass
-
-        self._print(f"qiclib version: {self._driver_version}")
+    def __str__(self):
+        return f"QiController({self._conn.ip}:{self._conn.port})"
 
     def _read_board_info(self):
         """Prints the used FPGA platform and the build date
@@ -280,7 +243,7 @@ class QiController(PlatformComponent):
         return self._pimc
 
     @property
-    def rfdc(self) -> RFDataConverter:
+    def rfdc(self) -> RFDataConverter | None:
         """The RF data converters (ADCs/DACs) of the QiController.
 
         This component provides configuration access to the data converters of the board
@@ -289,7 +252,7 @@ class QiController(PlatformComponent):
         return self._rfdc
 
     @property
-    def pulse_players(self) -> List[PulsePlayer]:
+    def pulse_players(self) -> list[PulsePlayer]:
         """
         The pulse players of the platform.
 
@@ -300,7 +263,7 @@ class QiController(PlatformComponent):
         return self._pulse_players
 
     @property
-    def taskrunner(self) -> Optional[TaskRunner]:
+    def taskrunner(self) -> TaskRunner | None:
         """The Taskrunner framework of the QiController.
 
         This subsystem can be used to run arbitrary C code on a processor of the
@@ -367,17 +330,6 @@ class QiController(PlatformComponent):
         if self._input_channels is None:
             raise AttributeError("DirectRf not available for this platform")
         return self._input_channels
-
-    @property
-    @platform_attribute
-    def driver_version(self):
-        """The description of the current git driver repository."""
-        return self._driver_version
-
-    @property
-    def driver_root_dir(self):
-        """The root directory of the qiclib package."""
-        return self._driver_root_dir
 
     @property
     @platform_attribute
@@ -462,8 +414,9 @@ class QiController(PlatformComponent):
             If existing error messages should not be printed to stderr, be default False
         """
         errors = self._get_errors()
-        # Also reset ADC over range & voltage detection
-        self.rfdc.reset_status()
+        if self.rfdc is not None:
+            # Also reset ADC over range & voltage detection
+            self.rfdc.reset_status()
         # Afterwards can reset flags of converters
         self.cell.clear_status_report()
         if errors and not silent:
@@ -472,7 +425,7 @@ class QiController(PlatformComponent):
                 + "\n\n{}".format("\n\n".join(errors))
             )
 
-    def _get_errors(self) -> List[str]:
+    def _get_errors(self) -> list[str]:
         """Collects all error messages and returns them as list of strings.
 
         :return:
@@ -684,7 +637,9 @@ class QiController(PlatformComponent):
         self.sample.rec_offset = self.recording.trigger_offset
         self.sample.rec_phase = self.recording.phase_offset
 
-        self.sample.rec_shift_offset = self.recording.value_shift_offset
+        self.sample.expected_highest_signal_amplitude = (
+            self.recording.expected_highest_signal_amplitude
+        )
         self.sample.rec_shift_average = self.recording.average_shift
 
         # This is more a good guess than a guarantee
@@ -707,7 +662,9 @@ class QiController(PlatformComponent):
         with suppress(AttributeError):
             self.recording.recording_duration = self.sample.rec_duration
         with suppress(AttributeError):
-            self.recording.value_shift_offset = self.sample.rec_shift_offset
+            self.recording.expected_highest_signal_amplitude = (
+                self.sample.expected_highest_signal_amplitude
+            )
         with suppress(AttributeError):
             self.recording.average_shift = self.sample.rec_shift_average
         with suppress(AttributeError):

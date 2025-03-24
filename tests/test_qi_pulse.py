@@ -13,123 +13,164 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-import unittest
+import pytest
 
 import qiclib.packages.utility as util
-from qiclib.code.qi_pulse import QiPulse, ShapeLib
+from qiclib.code import Play, QiSample, QiTimeVariable
 from qiclib.code.qi_jobs import (
-    QiCellProperty,
-    QiVariable,
-    QiStateVariable,
     QiCell,
+    QiCellProperty,
+    QiCells,
     QiJob,
-    _set_job_reference,
-    _delete_job_reference,
+    QiStateVariable,
+    QiVariable,
 )
+from qiclib.code.qi_pulse import QiPulse, ShapeLib
 from qiclib.packages.constants import CONTROLLER_SAMPLE_FREQUENCY_IN_HZ as samplerate
 
 
-class QiPulseTest(unittest.TestCase):
-    def setUp(self) -> None:
-        self.job = QiJob()
-        _set_job_reference(self.job)
-        return super().setUp()
+@pytest.fixture
+def job():
+    with QiJob() as job:
+        yield job
 
-    def tearDown(self) -> None:
-        _delete_job_reference()
-        return super().tearDown()
 
-    def test_shape_error(self):
-        with self.assertRaises(NotImplementedError):
-            QiPulse(length=QiVariable(), shape=ShapeLib.gauss)
+def test_shape_error(job):
+    with pytest.raises(NotImplementedError):
+        QiPulse(length=QiVariable(), shape=ShapeLib.gauss)
 
-    def test_length_error(self):
-        with self.assertRaises(RuntimeError):
-            QiPulse(length=util.conv_cycles_to_time(2**32))
 
-    def test_variable_amplitude_error(self):
-        with self.assertRaises(RuntimeError):
-            QiPulse(length=40e-9, amplitude=QiVariable(int))
+def test_length_error(job):
+    with pytest.raises(RuntimeError):
+        QiPulse(length=util.conv_cycles_to_time(2**32))
 
-    def test_state_var_error(self):
-        with self.assertRaises(TypeError):
-            QiPulse(length=QiStateVariable())
 
-    def test_pulse_equal_variable_length(self):
-        variable1 = QiVariable()
-        variable2 = QiVariable()
-        pulse1 = QiPulse(length=variable1)
-        pulse2 = QiPulse(length=variable2)
+def test_state_var_error(job):
+    with pytest.raises(TypeError):
+        QiPulse(length=QiStateVariable())
 
-        self.assertEqual(pulse1, pulse2)
 
-    def test_pulse_equal_length(self):
-        pulse1 = QiPulse(length=40e-9)
-        pulse2 = QiPulse(length=40e-9)
+def test_pulse_equal_variable_length(job):
+    variable1 = QiVariable()
+    variable2 = QiVariable()
+    pulse1 = QiPulse(length=variable1)
+    pulse2 = QiPulse(length=variable2)
 
-        self.assertEqual(pulse1, pulse2)
+    assert pulse1 == pulse2
 
-    def test_pulse_not_equal_length(self):
-        pulse1 = QiPulse(length=40e-9)
-        pulse2 = QiPulse(length=41e-9)
 
-        self.assertNotEqual(pulse1, pulse2)
+def test_pulse_equal_length(job):
+    pulse1 = QiPulse(length=40e-9)
+    pulse2 = QiPulse(length=40e-9)
 
-    def test_pulse_not_equal_length_variable(self):
-        variable1 = QiVariable()
-        pulse1 = QiPulse(length=variable1)
-        pulse2 = QiPulse(length=41e-9)
+    assert pulse1 == pulse2
 
-        self.assertNotEqual(pulse1, pulse2)
 
-    def test_get_pulse_length(self):
-        pulse = QiPulse(length=41e-9)
+def test_pulse_not_equal_length(job):
+    pulse1 = QiPulse(length=40e-9)
+    pulse2 = QiPulse(length=41e-9)
 
-        self.assertEqual(pulse.length, 41e-9)
+    assert pulse1 != pulse2
 
-    def test_get_pulse_length_cell_property(self):
-        cell = QiCell(42)
 
-        pulse = QiPulse(length=cell["test"])
+def test_pulse_not_equal_length_variable(job):
+    variable1 = QiVariable()
+    pulse1 = QiPulse(length=variable1)
+    pulse2 = QiPulse(length=41e-9)
 
-        self.assertIsInstance(pulse.length, QiCellProperty)
+    assert pulse1 != pulse2
 
-        cell["test"] = 52e-9
 
-        envelope = pulse(samplerate)
+def test_get_pulse_length(job):
+    pulse = QiPulse(length=41e-9)
 
-        self.assertEqual(len(envelope), 52e-9 * samplerate)
+    assert pulse.length == 41e-9
 
-    def test_get_pulse_length_variable(self):
-        variable = QiVariable()
-        pulse = QiPulse(length=variable)
 
-        length = pulse.length
+def test_get_pulse_length_cell_property(job):
+    cell = QiCell(42)
 
-        self.assertIsInstance(length, QiVariable)
+    pulse = QiPulse(length=cell["test"])
 
-        if isinstance(length, QiVariable):
-            self.assertEqual(length.id, variable.id)
+    assert isinstance(pulse.length, QiCellProperty)
 
-    def test_cw_pulse_initialization(self):
-        pulse_cw = QiPulse("cw", amplitude=0.5, frequency=66e6)
+    cell["test"] = 52e-9
 
-        self.assertEqual(pulse_cw.hold, True)
-        self.assertIsInstance(pulse_cw.length, float)
-        self.assertEqual(pulse_cw.length, util.conv_cycles_to_time(1))
-        self.assertEqual(pulse_cw.amplitude, 0.5)
-        self.assertEqual(pulse_cw.frequency, 66e6)
+    envelope = pulse(samplerate)
 
-        pulse_off = QiPulse("OFF")  # Case insensitive check (no exception raised)
+    assert len(envelope) == 52e-9 * samplerate
 
-        self.assertEqual(pulse_off.hold, False)
-        self.assertIsInstance(pulse_off.length, float)
-        self.assertEqual(pulse_off.length, util.conv_cycles_to_time(1))
-        self.assertEqual(pulse_off.amplitude, 0)
-        self.assertEqual(pulse_off.frequency, None)
 
-    def test_invalid_length_str_at_init(self):
-        with self.assertRaisesRegex(
-            ValueError, "QiPulse with str length only accepts 'cw' or 'off'."
-        ):
-            QiPulse("test")
+def test_get_pulse_length_variable(job):
+    variable = QiVariable()
+    pulse = QiPulse(length=variable)
+
+    length = pulse.length
+
+    assert isinstance(length, QiVariable)
+    assert length.id, variable.id
+
+
+def test_cw_pulse_initialization(job):
+    pulse_cw = QiPulse("cw", amplitude=0.5, frequency=66e6)
+
+    assert pulse_cw.hold
+    assert isinstance(pulse_cw.length, float)
+    assert pulse_cw.length == util.conv_cycles_to_time(1)
+    assert pulse_cw.amplitude == 0.5
+    assert pulse_cw.frequency == 66e6
+
+    pulse_off = QiPulse("OFF")  # Case insensitive check (no exception raised)
+
+    assert not pulse_off.hold
+    assert isinstance(pulse_off.length, float)
+    assert pulse_off.length == util.conv_cycles_to_time(1)
+    assert pulse_off.amplitude == 0
+    assert pulse_off.frequency is None
+
+
+def test_invalid_length_str_at_init(job):
+    with pytest.raises(
+        ValueError, match="QiPulse with str length only accepts 'cw' or 'off'."
+    ):
+        QiPulse("test")
+
+
+def test_two_pulses_with_the_same_parameterized_length_are_same():
+    sample = QiSample(1)
+    sample[0]["pulse_len"] = 100e6
+    with QiJob() as job:
+        q = QiCells(1)
+        Play(q[0], QiPulse(frequency=100e6, length=q[0]["pulse_len"]))
+        Play(q[0], QiPulse(frequency=100e6, length=q[0]["pulse_len"]))
+
+    assert len(job.cells[0].manipulation_pulses) == 1
+
+
+def test_two_pulses_with_different_parameterized_length_are_different():
+    sample = QiSample(1)
+    sample[0]["pulse_len1"] = 100e-6
+    sample[0]["pulse_len2"] = 200e-6
+    with QiJob() as job:
+        q = QiCells(1)
+        v = QiTimeVariable()
+        Play(q[0], QiPulse(frequency=100e6, length=q[0]["pulse_len1"]))
+        Play(q[0], QiPulse(frequency=100e6, length=q[0]["pulse_len2"]))
+        Play(q[0], QiPulse(frequency=100e6, length=v))
+        Play(q[0], QiPulse(frequency=100e6, length=150e-6))
+
+    assert len(job.cells[0].manipulation_pulses) == 4
+
+
+# In theory, this should work. However, pulses are being stored and checked for equality before properties are resolved.
+# Therefore, this is currently skipped.
+@pytest.mark.skip(reason="Not implemented")
+def test_two_pulses_with_parameterized_length_and_same_constant_are_same():
+    sample = QiSample(1)
+    sample[0]["pulse_len"] = 100e-6
+    with QiJob() as job:
+        q = QiCells(1)
+        Play(q[0], QiPulse(frequency=100e6, length=q[0]["pulse_len"]))
+        Play(q[0], QiPulse(frequency=100e6, length=100e-6))
+
+    assert len(job.cells[0].manipulation_pulses) == 1

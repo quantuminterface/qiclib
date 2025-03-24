@@ -13,10 +13,10 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-"""Module containing the ActiveCoolingT1 experiment for the QiController.
+"""Module containing the ActiveCoolingT1 experiment for the QiController."""
 
-"""
 import time
+
 import numpy as np
 
 from .t1 import T1

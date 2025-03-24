@@ -13,16 +13,20 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-import numpy as np
-from typing import List, Optional, Iterable, Union
+from __future__ import annotations
 
-from qiclib.hardware.platform_component import (
-    platform_attribute_collector,
-    PlatformComponent,
-)
-import qiclib.packages.grpc.pulse_player_pb2_grpc as grpc_stub
-import qiclib.packages.grpc.pulse_player_pb2 as proto
+from collections.abc import Sequence
+
+import numpy as np
+import numpy.typing as npt
+
 import qiclib.packages.grpc.datatypes_pb2 as dt
+import qiclib.packages.grpc.pulse_player_pb2 as proto
+import qiclib.packages.grpc.pulse_player_pb2_grpc as grpc_stub
+from qiclib.hardware.platform_component import (
+    PlatformComponent,
+    platform_attribute_collector,
+)
 
 
 @platform_attribute_collector
@@ -34,10 +38,10 @@ class PulsePlayer(PlatformComponent):
     """
 
     class _PulsesProxy:
-        def __init__(self, pulse_player: "PulsePlayer"):
+        def __init__(self, pulse_player: PulsePlayer):
             self._player = pulse_player
 
-        def __setitem__(self, key: Union[int, slice, tuple], value):
+        def __setitem__(self, key: int | slice | tuple, value: Sequence[float]):
             if isinstance(key, slice):
                 start = key.start or 0
                 stop = key.stop or 3
@@ -55,14 +59,14 @@ class PulsePlayer(PlatformComponent):
                     )
                 )
 
-        def __getitem__(self, item: Union[int, slice, tuple]) -> np.array:
+        def __getitem__(self, item: int | slice | tuple) -> npt.NDArray[np.float64]:
             if isinstance(item, slice):
                 start = item.start or 0
                 stop = item.stop or 4
                 step = item.step or 1
-                return [self[i] for i in range(start, stop, step)]
+                return np.array([self[i] for i in range(start, stop, step)])
             elif isinstance(item, tuple):
-                return [self[i] for i in item]
+                return np.array([self[i] for i in item])
             else:
                 return np.array(
                     self._player._stub.GetPulse(
@@ -82,7 +86,7 @@ class PulsePlayer(PlatformComponent):
         self._pulses = PulsePlayer._PulsesProxy(self)
         self._stub = grpc_stub.PulsePlayerServiceStub(self._conn.channel)
         self._index = dt.EndpointIndex(value=index)
-        self._triggerset: List[Optional[np.array]] = [None]
+        self._triggerset: list[np.ndarray | None] = [None]
 
     @property
     def pulses(self) -> _PulsesProxy:
@@ -111,6 +115,21 @@ class PulsePlayer(PlatformComponent):
         Manually trigger a pulse.
         """
         self._stub.Trigger(proto.PulseIndex(index=self._index, pulse=index))
+
+    @property
+    def offset(self) -> float:
+        """
+        Get offset value.
+        """
+        getoffset = self._stub.GetOffset(self._index)
+        return getoffset.offset_value
+
+    @offset.setter
+    def offset(self, offset_value: float):
+        """
+        Set offset value.
+        """
+        self._stub.SetOffset(proto.Offset(index=self._index, offset_value=offset_value))
 
     @property
     def pulse_capacity(self) -> int:

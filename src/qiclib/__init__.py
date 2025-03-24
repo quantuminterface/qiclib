@@ -32,7 +32,10 @@ importing :python:`qiclib`:
     A collection of descriptions for most common qubit experiments.
 """
 
-from qiclib.hardware.controller import QiController
+from qiclib._version import __version__, __version_tuple__
 from qiclib.experiment import collection as exp
 from qiclib.experiment.qicode import collection as jobs
 from qiclib.experiment.qicode import init_readout as init
+from qiclib.hardware.controller import QiController
+
+__all__ = ["QiController", "__version__", "__version_tuple__", "exp", "init", "jobs"]

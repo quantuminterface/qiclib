@@ -13,11 +13,14 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-from typing import Dict, List, Any, Union, Sized
+from __future__ import annotations
+
 import warnings
-from collections.abc import Iterable
+from collections.abc import Iterable, Sized
+from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 from qkit.measure.timedomain.pulse_sequence import (
     Pulse,
     PulseSequence,
@@ -27,11 +30,10 @@ from qkit.measure.timedomain.pulse_sequence import (
 from qkit.measure.timedomain.VirtualAWG import VirtualAWG
 
 from qiclib import QiController
-from qiclib.hardware.pulsegen import TriggerSet
 from qiclib.coding.sequencercode import SequencerCode
 from qiclib.experiment.base import BaseExperiment
+from qiclib.hardware.pulsegen import TriggerSet
 from qiclib.packages.constants import CONTROLLER_SAMPLE_FREQUENCY_IN_HZ as samplerate
-
 from qiclib.packages.qkit_polyfill import QKIT_ENABLED
 
 if not QKIT_ENABLED:
@@ -90,9 +92,9 @@ class QkitVirtualAWG(BaseExperiment):
         from qkit.measure.timedomain.measure_td import Measure_td
 
         m = Measure_td(qic.sample, exp.readout)
-        m.set_x_parameters(delays, 'delay', None, 's')
-        m.dirname = 't1'
-        m.measure_1D_AWG(iterations=5) # How often to repeat the whole measurement
+        m.set_x_parameters(delays, "delay", None, "s")
+        m.dirname = "t1"
+        m.measure_1D_AWG(iterations=5)  # How often to repeat the whole measurement
 
     Current limitations
     -------------------
@@ -120,14 +122,14 @@ class QkitVirtualAWG(BaseExperiment):
             raise NotImplementedError("Currently, only 1 sequence can be loaded!")
         sequence, variables = chan.get_sequence(0)
         self.sequence: PulseSequence = sequence
-        self.variables: Dict[str, Union[float, List[float]]] = variables
+        self.variables: dict[str, float | list[float]] = variables
 
         # performs a overlap check if only fix pulses are present.
         readout_timer = 0
         pulse_timer = 0
         timer = 0
         # stores the parametrized pulses and the number of the delay register where the duration will be written in.
-        self.delay_register: Dict[Pulse, int] = {}
+        self.delay_register: dict[Pulse, int] = {}
         self.iterations = 1  # three if a parametrized pulse is present
         self.parametrized = False  # True if a parametrized Pulse is present
         register_counter = 1
@@ -183,13 +185,13 @@ class QkitVirtualAWG(BaseExperiment):
                     readout_timer += pulse_durations[
                         pulse_types.index(PulseType.Readout)
                     ]  # point of time where the last readout ends
-                except:
+                except (ValueError, KeyError):
                     pass
                 try:
                     pulse_timer += pulse_durations[
                         pulse_types.index(PulseType.Pulse)
                     ]  # point of time where the last pulse ends
-                except:
+                except (ValueError, KeyError):
                     pass
                 timer += min(pulse_durations)
                 if readout_timer > timer:
@@ -305,12 +307,12 @@ class QkitVirtualAWG(BaseExperiment):
         """
         try:
             repetition_time = self.qic.sample.T_rep
-        except:
+        except AttributeError:
             repetition_time = 2e-6
 
         remember = False  # remember triggersets of last item if a fixed pulse is skipped and the next pulse is parallel with length 0
         # store the keyword of two different sequences and the sequencer command number at which they start.
-        self._pc_dict: Dict[str, int] = {}
+        self._pc_dict: dict[str, int] = {}
         sequence_names = ["normal", "short", "zero"]  # names of the sequences
         code = SequencerCode(self._pc_dict)
         last_pulse = None  # will contain the last pulse.
@@ -468,8 +470,8 @@ class QkitVirtualAWG(BaseExperiment):
             pass
 
     def _single_execution(
-        self, value_dict: Dict[str, float]
-    ) -> Dict[str, Union[int, List[int]]]:
+        self, value_dict: dict[str, float]
+    ) -> dict[str, int | list[int]]:
         """sets delay registers and starting points for the sequencer
 
         :param value_dict:
@@ -500,24 +502,26 @@ class QkitVirtualAWG(BaseExperiment):
                 "delay_registers": delays,
             }
 
-    def _record_internal(self):
+    def _record_internal(
+        self,
+    ) -> (
+        list[tuple[float, float]]
+        | list[tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]]
+    ):
         """overwrites the record internal of the base class. This method plays the right sequence for given values for
         the variables.
         Note that Variables can be given as single value or array
 
         :return: If two recordings two amplitude and phase tuples are returned in an array. otherwise only one tuple.
-        :return-type: Union[List[Tuple[float, float]], np.array[Tuple[float, float]]]
 
         :raises Exception:
             If Keyword zero not found in _pc_dict
         """
         if self.variables and isinstance(
-            list(self.variables.values())[0], Iterable
+            next(iter(self.variables.values())), Iterable
         ):  # for arrays as variable values
-            dict_list = (
-                []
-            )  # each element is a dictionary containing a single value of the given arrays
-            for counter in range(len(list(self.variables.values())[0])):
+            dict_list = []  # each element is a dictionary containing a single value of the given arrays
+            for counter in range(len(next(iter(self.variables.values())))):
                 single_value_dict = {
                     name: list(value_list)[counter]
                     for name, value_list in self.variables.items()

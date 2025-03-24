@@ -106,7 +106,10 @@ class _InternalPluginDataProvider(DataProvider):
 
     @staticmethod
     def _get_iq_cloud(data, index: int, recording_count: int):
-        return data[recording_count * index : recording_count * (index + 1)]
+        return data[
+            index * (len(data) // recording_count) : (index + 1)
+            * (len(data) // recording_count)
+        ]
 
     def get_iq_cloud_i(self, cell_index: int, index: int, recording_count: int):
         data = self._result[cell_index][0]

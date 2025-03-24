@@ -13,8 +13,10 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+from __future__ import annotations
 
 from typing import Callable
+
 from qiskit.providers import ProviderV1 as Provider
 from qiskit.providers.providerutils import filter_backends
 
@@ -32,7 +34,6 @@ def remove_duplicates(input_list):
 
 
 class QiController_provider(Provider):
-
     """Provider for backends from the QiController hardware
 
     :ivar backend:
@@ -50,7 +51,7 @@ class QiController_provider(Provider):
         self.coupling_map = remove_duplicates(coupling_map)
         self.backends = [QiController_backend(provider=self)]
 
-    def backends(self, name=None, filters: Callable = None, **kwargs):
+    def backends(self, name=None, filters: Callable | None = None, **kwargs):
         """A listing of all backends from the QiController provider
 
         :param name:
@@ -64,7 +65,6 @@ class QiController_provider(Provider):
         :return: A list of backends, if any
 
         """
-
         if name:
             backends = [backend for backend in self.backends if backend.name() == name]
         return filter_backends(backends, filters=filters, **kwargs)

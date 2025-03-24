@@ -14,12 +14,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """Contains the Driver to control a Storage Module on the Hardware Platform.."""
-from qiclib.hardware.platform_component import PlatformComponent
 
-from qiclib.packages.servicehub import ServiceHubCall
-import qiclib.packages.grpc.qic_storage_pb2 as proto
 import qiclib.packages.grpc.datatypes_pb2 as dt
+import qiclib.packages.grpc.qic_storage_pb2 as proto
 import qiclib.packages.grpc.qic_storage_pb2_grpc as grpc_stub
+from qiclib.hardware.platform_component import PlatformComponent
+from qiclib.packages.servicehub import ServiceHubCall
 
 
 class Storage(PlatformComponent):
@@ -47,7 +47,7 @@ class Storage(PlatformComponent):
                 index=i,
                 storage=self,
             )
-            for i in range(0, 4)
+            for i in range(4)
         ]
 
     def extract_states(self, val, dense=False):

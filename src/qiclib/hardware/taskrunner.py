@@ -14,22 +14,23 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """Driver to control the Taskrunner on the Hardware Platform."""
+
+from __future__ import annotations
+
 import os
 from enum import Enum
+from typing import Any
 
-from typing import List, Any
-
+import qiclib.packages.grpc.datatypes_pb2 as dt
+import qiclib.packages.grpc.taskrunner_pb2 as proto
+import qiclib.packages.grpc.taskrunner_pb2_grpc as grpc_stub
+from qiclib.experiment.rtos_tasks import get_task_source
 from qiclib.hardware.platform_component import (
     PlatformComponent,
     platform_attribute,
     platform_attribute_collector,
 )
-from qiclib.experiment.rtos_tasks import get_task_source
-
 from qiclib.packages.servicehub import ServiceHubCall
-import qiclib.packages.grpc.taskrunner_pb2 as proto
-import qiclib.packages.grpc.datatypes_pb2 as dt
-import qiclib.packages.grpc.taskrunner_pb2_grpc as grpc_stub
 
 
 @platform_attribute_collector
@@ -200,7 +201,7 @@ class TaskRunner(PlatformComponent):
     @ServiceHubCall(errormsg="Failed to fetch databoxes from taskrunner")
     def get_databoxes_with_mode(
         self, mode=DataMode.INT32, require_done=True
-    ) -> List[List[Any]]:
+    ) -> list[list[Any]]:
         """Retrieves data from a previously started task on the R5.
         Depending on the parameter mode, the data is interpreted differently.
 
@@ -237,7 +238,7 @@ class TaskRunner(PlatformComponent):
         if method_call is None:
             raise ValueError("Data mode is unknown! Only use DataMode Enum values.")
 
-        databoxes: List[List[Any]] = []
+        databoxes: list[list[Any]] = []
         last_index = -1
         for databox_reply in method_call(dt.Empty()):
             # print databox_reply.index, databox_reply.data[:]

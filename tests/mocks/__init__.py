@@ -21,9 +21,9 @@ The intended usage is with the `patch()` function from `unittest`, for example:
 from unittest import patch
 from mocks import pimc
 
+
 @patch("qiclib.packages.grpc.pimc_pb2_grpc.PIMCServiceStub", new=pimc.MockPIMCService)
-def test_something_that_uses_the_pimc_module():
-   ... # In this function, all calls to the PIMC service are replaced by the mock pimc service
+def test_something_that_uses_the_pimc_module(): ...  # In this function, all calls to the PIMC service are replaced by the mock pimc service
 ```
 
 For easier development, all mocked modules contain a `patch` function to replace their 'real' counterpart, i.e.
@@ -31,9 +31,9 @@ For easier development, all mocked modules contain a `patch` function to replace
 ```
 from mocks import pimc
 
+
 @pimc.patch()
-def test_something_that_uses_the_pimc_module():
-    ... # Same as above
+def test_something_that_uses_the_pimc_module(): ...  # Same as above
 ```
 
 The `patch` function from the mocks module can be mock multiple modules, i.e. this
@@ -49,22 +49,35 @@ def test_something():
 is equivalent to the following:
 ```
 @mocks.patch(pimc, pulse_gen, recording, ...)
-def test_something():
-    ... # Test something that uses many hardware component, for example a `QiJob`
+def test_something(): ...  # Test something that uses many hardware component, for example a `QiJob`
 ```
 """
+
 from mocks import (
+    digital_trigger,
     pimc,
     pulse_gen,
     recording,
     rfdc,
     sequencer,
     servicehub_control,
-    unit_cell,
     taskrunner,
-    digital_trigger,
+    unit_cell,
 )
 from mocks.unit_cell import MockUnitCellServiceStub
+
+__all__ = [
+    "MockUnitCellServiceStub",
+    "digital_trigger",
+    "pimc",
+    "pulse_gen",
+    "recording",
+    "rfdc",
+    "sequencer",
+    "servicehub_control",
+    "taskrunner",
+    "unit_cell",
+]
 
 
 def patch(*modules):
@@ -75,9 +88,9 @@ def patch(*modules):
     from mocks import *
     import mocks
 
+
     @mocks.patch(pimc, pulse_gen)
-    def test_something():
-        ... # test code
+    def test_something(): ...  # test code
     ```
     """
 

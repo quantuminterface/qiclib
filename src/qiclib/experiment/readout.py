@@ -14,13 +14,14 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """Readout traces averaging done at the R5 rpocessor"""
+
 import warnings
 
 import numpy as np
 
-from qiclib.experiment.base import BaseExperiment
-import qiclib.packages.utility as util
 import qiclib.packages.constants as const
+import qiclib.packages.utility as util
+from qiclib.experiment.base import BaseExperiment
 
 
 class IQFtReadout(BaseExperiment):
@@ -112,7 +113,6 @@ class IQRawReadout(BaseExperiment):
     def _record_internal(self):
         old_offset = self.cell.recording.trigger_offset
         old_length = self.cell.recording.recording_duration
-        old_shift = self.cell.recording.value_shift_offset
         old_averages = self.cell.sequencer.averages
 
         # Ensure no averaging on the QiController
@@ -125,7 +125,6 @@ class IQRawReadout(BaseExperiment):
         finally:
             self.cell.recording.trigger_offset = old_offset
             self.cell.recording.recording_duration = old_length
-            self.cell.recording.value_shift_offset = old_shift
             self.cell.sequencer.averages = old_averages
 
         data = data / (1.0 * self.iteration_averages)

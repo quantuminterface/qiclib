@@ -14,22 +14,21 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """Measurement script that integrates IQClouds measurements with the QiController into Qkit."""
-import threading
+
 import logging
+import threading
+
 import numpy as np
 
 # For type recognition
 # pylint: disable=unused-import
-from qiclib.experiment.iq_clouds import IQClouds
-
 # pylint: enable=unused-import
-
-from qiclib.packages.qkit_polyfill import qkit, QKIT_ENABLED
+from qiclib.packages.qkit_polyfill import QKIT_ENABLED, qkit
 
 if QKIT_ENABLED:
-    from qkit.storage import store as hdf
-    from qkit.gui.plot import plot as qkit_viewer
     import qkit.measure.write_additional_files as waf
+    from qkit.gui.plot import plot as qkit_viewer
+    from qkit.storage import store as hdf
 
 
 class IQMeasurement:

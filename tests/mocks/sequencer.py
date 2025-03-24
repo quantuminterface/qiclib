@@ -17,7 +17,6 @@ from unittest import mock
 
 
 class MockSequencer:
-
     module_path = "qiclib.packages.grpc.sequencer_pb2_grpc.SequencerServiceStub"
 
     def __init__(self, _):

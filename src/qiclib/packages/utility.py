@@ -14,9 +14,11 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """Bundle of different functions and classes used for QiController experiments"""
+
+from __future__ import annotations
+
 import math
 import warnings
-from typing import Optional
 
 import numpy as np
 
@@ -28,15 +30,15 @@ def conv_cycles_to_time(clock_cycles):
     return float(clock_cycles) / const.CONTROLLER_FREQUENCY_IN_HZ
 
 
-def conv_time_to_cycles(time, mode="round"):
+def conv_time_to_cycles(time: float, mode="round"):
     """Converts a given time in seconds to the equivalent number of clock cycles.
     Depending on the mode either an upper limit (ceil) is given or the nearest clock cycle count (round).
     """
     # TODO check where ceil is needed...
     if mode == "ceil":
-        return int(math.ceil(time * const.CONTROLLER_FREQUENCY_IN_HZ))
+        return math.ceil(time * const.CONTROLLER_FREQUENCY_IN_HZ)
     else:  # round
-        return int(round(time * const.CONTROLLER_FREQUENCY_IN_HZ))
+        return round(time * const.CONTROLLER_FREQUENCY_IN_HZ)
 
 
 def time_is_integer_clock_cycles(time):
@@ -47,8 +49,16 @@ def time_is_integer_clock_cycles(time):
     return diff / const.CONTROLLER_CYCLE_TIME < 1e-6
 
 
+def conv_amplitude_to_int(amplitude):
+    return int(amplitude * (2**15 - 1))
+
+
 def conv_freq_to_nco_phase_inc(frequency):
     """Converts a given frequency to the phase increment of the NCO."""
+    if frequency >= 500e6:
+        raise ValueError(f"Frequency of {frequency:.2g} Hz is too high")
+    if frequency < -500e6:
+        raise ValueError(f"Frequency of {frequency:.2g} Hz is too low")
     return int(round(frequency * const.CONTROLLER_NCO_PHASE_INCREMENT_PER_HZ, 0))
 
 
@@ -110,7 +120,7 @@ def conv_time_to_sample_time(time):
 
 def conv_amplitude_factor_to_register(factor):
     """Converts a given amplitude factor in [0, 1] to the representing register value."""
-    return int(round(factor * const.CONTROLLER_AMPLITUDE_MAX_VALUE))
+    return round(factor * const.CONTROLLER_AMPLITUDE_MAX_VALUE)
 
 
 def conv_amplitude_register_to_factor(register):
@@ -119,7 +129,7 @@ def conv_amplitude_register_to_factor(register):
 
 
 def generate_pulseform(
-    duration: float, align="start", drag_amplitude: Optional[float] = None
+    duration: float, align="start", drag_amplitude: float | None = None
 ):
     """Generates a square shaped pulse with a given *duration*.
     If *drag_amplitude* is given, a DRAG pulse is generated instead.
@@ -187,6 +197,10 @@ def generate_pulseform(
 
 def calculate_stater_config(state0_I, state0_Q, state1_I, state1_Q):
     # We assume Cov = 1
+    warnings.warn(
+        "Use the new qiclib.state_estimation.LinearDiscriminator class",
+        DeprecationWarning,
+    )
     config_a_I = state1_I - state0_I
     config_a_Q = state1_Q - state0_Q
     config_b = (state0_I**2 + state0_Q**2 - state1_I**2 - state1_Q**2) / 2
@@ -194,7 +208,11 @@ def calculate_stater_config(state0_I, state0_Q, state1_I, state1_Q):
 
 
 def calculate_stater_state(data_I, data_Q, config):
-    return 1 if (data_I * config[0] + data_Q * config[1] + config[2]) >= 0 else 0
+    warnings.warn(
+        "Use the new qiclib.state_estimation.LinearDiscriminator class",
+        DeprecationWarning,
+    )
+    return np.where(data_I * config[0] + data_Q * config[1] + config[2] >= 0, 1, 0)
 
 
 def flatten(list):

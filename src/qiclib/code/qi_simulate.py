@@ -20,24 +20,29 @@ Currently, this is only used to figure out the order of recording commands.
 """
 
 # (In the future we might want to create a real simulator with support for more complex programs)
-from typing import Dict, List, Any
+from __future__ import annotations
+
+from typing import Any
+
+from qiclib.code.qi_command import (
+    AssignCommand,
+    DeclareCommand,
+    ForRangeCommand,
+    ParallelCommand,
+    PlayReadoutCommand,
+    RecordingCommand,
+)
 from qiclib.code.qi_jobs import (
-    ForRange,
-    Parallel,
     QiCell,
     QiCommand,
-    cQiAssign,
-    cQiDeclare,
-    cQiPlayReadout,
-    cQiRecording,
 )
 from qiclib.code.qi_var_definitions import (
-    _QiCalcBase,
-    _QiConstValue,
-    _QiVariableBase,
     QiCellProperty,
     QiExpression,
     QiOp,
+    _QiCalcBase,
+    _QiConstValue,
+    _QiVariableBase,
 )
 from qiclib.packages.constants import RECORDING_MAX_RAW_SAMPLES
 
@@ -55,12 +60,12 @@ class Simulator:
     See :meth:`qiclib.code._simulate_recordings`
     """
 
-    def __init__(self, cells: List[QiCell]):
+    def __init__(self, cells: list[QiCell]):
         # Current state of loop variables
-        self.variables: Dict[_QiVariableBase, Any] = {}
+        self.variables: dict[_QiVariableBase, Any] = {}
 
         # The order of recordings for a cell
-        self.cell_recordings: Dict[QiCell, List[cQiRecording]] = {}
+        self.cell_recordings: dict[QiCell, list[RecordingCommand]] = {}
         for cell in cells:
             self.cell_recordings[cell] = []
 
@@ -100,12 +105,12 @@ class Simulator:
         else:
             raise AssertionError("Unknown QiExpression type")
 
-    def _simulate(self, commands: List[QiCommand]):
+    def _simulate(self, commands: list[QiCommand]):
         for cmd in commands:
-            if isinstance(cmd, cQiPlayReadout) and cmd.recording is not None:
+            if isinstance(cmd, PlayReadoutCommand) and cmd.recording is not None:
                 cmd = cmd.recording
 
-            if isinstance(cmd, cQiRecording):
+            if isinstance(cmd, RecordingCommand):
                 if len(self.cell_recordings[cmd.cell]) >= RECORDING_MAX_RAW_SAMPLES:
                     raise RuntimeError(
                         f"More than {RECORDING_MAX_RAW_SAMPLES} recordings during job execution."
@@ -113,16 +118,16 @@ class Simulator:
 
                 self.cell_recordings[cmd.cell].append(cmd)
 
-            elif isinstance(cmd, cQiDeclare):
+            elif isinstance(cmd, DeclareCommand):
                 self.variables[cmd.var] = Simulator.Unassigned
 
-            elif isinstance(cmd, cQiAssign):
+            elif isinstance(cmd, AssignCommand):
                 self.variables[cmd.var] = self._eval(cmd.value)
 
-            elif isinstance(cmd, Parallel):
+            elif isinstance(cmd, ParallelCommand):
                 self._simulate(cmd.body)
 
-            elif isinstance(cmd, ForRange):
+            elif isinstance(cmd, ForRangeCommand):
                 assert cmd.var in self.variables
 
                 if isinstance(cmd.start, _QiVariableBase):

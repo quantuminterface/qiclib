@@ -14,22 +14,24 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """This file contains the IQCloud experiment description for the QiController."""
+
 # pylint: disable=wrong-import-order, import-error, wrong-import-position
 import threading
 import time
+
 import numpy as np
 
-from .qubit_times import QubitTimes
-
 from qiclib.packages.qkit_polyfill import QKIT_ENABLED
+
+from .qubit_times import QubitTimes
 
 if not QKIT_ENABLED:
     raise ImportError("Qkit is required to use the QubitTimesQkit experiment...")
 
-from qkit.storage import store
 import qkit.measure.write_additional_files as waf
-from qkit.gui.plot import plot as qviewkit
 from qkit.analysis import qfit
+from qkit.gui.plot import plot as qviewkit
+from qkit.storage import store
 
 
 class QubitTimesQkit(QubitTimes):

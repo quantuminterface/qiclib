@@ -14,23 +14,21 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """Driver to control the Sequencer on the Hardware Platform."""
+
+from collections.abc import Sequence
+
+import qiclib.packages.grpc.datatypes_pb2 as dt
+import qiclib.packages.grpc.sequencer_pb2 as proto
+import qiclib.packages.grpc.sequencer_pb2_grpc as grpc_stub
 from qiclib.hardware.platform_component import (
     PlatformComponent,
     platform_attribute,
     platform_attribute_collector,
 )
-
 from qiclib.packages.servicehub import ServiceHubCall
 
-import qiclib.packages.grpc.sequencer_pb2 as proto
-import qiclib.packages.grpc.datatypes_pb2 as dt
-import qiclib.packages.grpc.sequencer_pb2_grpc as grpc_stub
 
-
-from qiclib.coding.sequencercode import SequencerCodeBase
-
-
-class _SequencerRegisters:
+class _SequencerRegisters(Sequence):
     def __init__(self, endpoint: int, stub: grpc_stub.SequencerServiceStub):
         self._endpoint = endpoint
         self._stub = stub
@@ -38,6 +36,9 @@ class _SequencerRegisters:
     def get_all(self):
         """Returns a list with all 32bit unsigned int register values."""
         return self._stub.GetAllRegisters(dt.EndpointIndex(value=self._endpoint)).list
+
+    def __len__(self):
+        return 32
 
     def __getitem__(self, index):
         self._check_index(index)
@@ -60,6 +61,9 @@ class _SequencerRegisters:
             raise IndexError("Value needs to be a non-negative integer.")
         if value >= 2**32:
             raise IndexError("Register value is limited to 32 bits.")
+
+    def __str__(self):
+        return "[" + ", ".join(map(str, self)) + "]"
 
 
 @platform_attribute_collector
@@ -145,7 +149,6 @@ class Sequencer(PlatformComponent):
         )
 
     def load_program(self, code, description="No Description"):
-        # type: (SequencerCodeBase, str) -> None
         """Loads the SequencerCode object into the Sequencer module on the Platform.
 
         :param code: SequencerCode
@@ -221,3 +224,11 @@ class Sequencer(PlatformComponent):
             "averages": self.averages,
         }
         return configuration_dict
+
+    @property
+    def is_enabled(self) -> bool:
+        return self._stub.IsEnabled(self._component).value
+
+    @is_enabled.setter
+    def is_enabled(self, value: bool):
+        self._stub.SetEnabled(dt.IndexedBool(value=value, index=self._component))

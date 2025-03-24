@@ -1,0 +1,28 @@
+exclude = [
+    "src/qiclib/packages/grpc/ipe_servicehub_protos",
+    "src/qiclib/_version.py",
+]
+
+[format]
+docstring-code-format = true
+
+[lint]
+select = [
+    "E",
+    "F",
+    "W",
+    "Q",
+    "I",
+    "UP",
+    "YTT",
+    "ASYNC",
+    "BLE",
+    "C4",
+    "FA",
+    "Q",
+    "RSE",
+    "RUF",
+    "NPY",
+    "FURB",
+]
+ignore = ["E501", "F405", "F403"]

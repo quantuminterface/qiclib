@@ -20,7 +20,9 @@ signals in various nyquist zones (Bands with various GHz of bandwidth).
 This platform component is capable of choosing that nyquist zone and manually setting the attenuation
 for ADC and DAC channels.
 """
+
 import abc
+
 import qiclib.packages.grpc.balunatten_pb2 as dt
 import qiclib.packages.grpc.balunatten_pb2_grpc as grpc_stub
 from qiclib.hardware.platform_component import PlatformComponent
@@ -75,7 +77,7 @@ class DacChannel(_Channel):
         """
         Sets this DAC to DC operation mode (can be understood as 0th nyquist zone).
         """
-        self._stub.SwitchDC(dt.Channel(channel=self._channel))
+        self._stub.SwitchDC(self._channel)
 
 
 class DirectRfAddon(PlatformComponent):

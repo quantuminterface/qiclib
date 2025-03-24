@@ -13,12 +13,15 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+from typing import TYPE_CHECKING
 
 from qiskit.providers.jobstatus import JobStatus
 from qiskit.result import Result
-from typing import Dict
 
 from qiclib.code import QiCells
+
+if TYPE_CHECKING:
+    from qiclib.packages.qiskit.QiController_backend import QiController_backend
 
 
 class QiController_job:
@@ -42,7 +45,13 @@ class QiController_job:
 
     """
 
-    def __init__(self, backend: str, sample: QiCells, shots: int, measurements: Dict):
+    def __init__(
+        self,
+        backend: "QiController_backend",
+        sample: QiCells,
+        shots: int,
+        measurements: dict,
+    ):
         self.backend = backend
         self.sample = sample
         self.shots = shots
@@ -51,11 +60,10 @@ class QiController_job:
         self.qobj_id = "EXP001"
         self.job_id = "EXP001"
 
-    def result(self):
+    def result(self) -> Result:
         """Retrieve measurement result
 
         :return: Qiskit Result object
-
         """
         results = [
             {
@@ -81,7 +89,7 @@ class QiController_job:
         )
 
     def get_counts(self):
-        """Rtrieve the counts of measurement result
+        """Retrieve the counts of measurement result
 
         :return:
             Dictionary object of quantum states and their frequencies
@@ -90,7 +98,7 @@ class QiController_job:
         return self.result().get_counts()
 
     def get_memory(self):
-        """Rtrieve the measurement results of each single shot
+        """Retrieve the measurement results of each single shot
 
         :return:
             List object of quantum states
@@ -104,7 +112,7 @@ class QiController_job:
         self.backend.stop()
 
     def status(self):
-        """Rtrieve the status of the submitted job
+        """Retrieve the status of the submitted job
 
         :return:
             Job status of the submitted job

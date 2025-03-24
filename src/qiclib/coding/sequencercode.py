@@ -14,8 +14,11 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """This script provides a class to easily generate code for the QiController sequencer."""
-import struct
+
+from __future__ import annotations
+
 import binascii
+import struct
 
 import qiclib.packages.utility as util
 
@@ -33,10 +36,10 @@ class SequencerCodeBase:
         This can be used to store different experiments inside the same SequencerCodeBase object.
     """
 
-    def __init__(self, pc_dict=None):
-        self.assembler = []
+    def __init__(self, pc_dict: dict[str, int] | None = None) -> None:
+        self.assembler: list[str] = []
         self.binary = bytearray()
-        self._instruction_values = []  # type: List[int]
+        self._instruction_values: list[int] = []
         self.program_counter = 0
         self.pc_dict = pc_dict
 
@@ -102,9 +105,9 @@ class SequencerCodeBase:
 
         if not isinstance(clock_cycles, int) or clock_cycles < 0:
             raise ValueError("Clock cycles to wait need to be a non-negative integer!")
-        if clock_cycles >= (1 << 12):
+        if clock_cycles >= 2**20:
             raise ValueError(
-                "Cannot wait more than 2^12 clock cycles. Try WTR instead."
+                "Cannot wait more than 2^20 clock cycles. Try WTR instead."
             )
 
         if clock_cycles == 0:
@@ -117,7 +120,7 @@ class SequencerCodeBase:
         # Binary:
         #   0-6 OpCode (WAIT_IMM = 0x4)
         #   7-11 Rd (Unused)
-        #   12-24 Wait Cycles
+        #   12-31 Wait Cycles
         self._add_command_value(0b0000100 + (clock_cycles << 12))  # opcode WAIT_IMM
 
         return self
@@ -547,8 +550,6 @@ class SequencerCode(SequencerCodeBase):
             raise ValueError(
                 "delay must be smaller than 2^12 clock cycles. Try TRR instead."
             )
-        if register < 0 or register >= (1 << 4):
-            raise ValueError("register has to be between 0 and 15.")
         if manipulation < 0 or manipulation >= (1 << 4):
             raise ValueError("manipulation has to be between 0 and 15.")
         if readout < 0 or readout >= (1 << 4):

@@ -24,18 +24,22 @@ implementing the experiments. This also includes integration with Qkit.
     private methods and capabilities it offers.
 
 """
-# Py3.7: from __future__ import annotations
-from typing import Dict, Optional, Union, List, Callable
+
+from __future__ import annotations
+
 import time
 import warnings
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from qiclib.coding.sequencercode import SequencerCode
 import qiclib.packages.utility as util
-from qiclib.packages.qkit_polyfill import QKIT_ENABLED, Progress_Bar
+from qiclib.coding.sequencercode import SequencerCode
 from qiclib.hardware.taskrunner import TaskRunner
-from qiclib.hardware.controller import QiController
+from qiclib.packages.qkit_polyfill import QKIT_ENABLED, Progress_Bar
+
+if TYPE_CHECKING:
+    from qiclib.hardware.controller import QiController
 
 
 class BaseExperiment:
@@ -93,9 +97,9 @@ class BaseExperiment:
         self.sleep_delay_while_busy = 0.2
 
         # Internal attributes
-        self._pc_dict: Dict[str, int] = {}
+        self._pc_dict: dict[str, int] = {}
         self._code = SequencerCode(self._pc_dict)
-        self._progress_bar: Dict[str, Progress_Bar] = {}
+        self._progress_bar: dict[str, Progress_Bar] = {}
 
         self._initial_state = None
         self._initial_delay = 0
@@ -104,7 +108,7 @@ class BaseExperiment:
 
         # If this experiment supports streaming of databoxes
         self._databox_streaming = False
-        self._databoxes: List[List[int]] = []  # Fetched databoxes
+        self._databoxes: list[list[int]] = []  # Fetched databoxes
 
         # check if configure was called
         self._configure_called = False
@@ -270,7 +274,7 @@ class BaseExperiment:
     def configure_readout_pulse(
         self,
         length: float,
-        recording_window: Optional[float] = None,
+        recording_window: float | None = None,
         no_warn: bool = False,
     ):
         """Configures a readout pulse with a given length.
@@ -344,9 +348,9 @@ class BaseExperiment:
 
     def set_qubit_initialization(
         self,
-        state: Optional[int] = 0,
+        state: int | None = 0,
         delay: float = 0,
-        repetition_time: Optional[float] = None,
+        repetition_time: float | None = None,
         phase_reset: bool = False,
     ):
         """Enables an active reset operation prior to the regular experiment
@@ -600,7 +604,6 @@ class BaseExperiment:
         self.cell.sequencer.load_program(code, self._name)
 
     def _add_code_sequence(self, code, code_factory, add_readout=True, add_sync=True):
-        # type: (SequencerCode, Callable, bool, bool) -> None
         """Adds the sequence described in `code_factory` to the SequencerCode `code`"""
         if add_sync:
             code.trigger_nco_sync()
@@ -692,11 +695,14 @@ class BaseExperiment:
                         )
                     )
 
-            parameters = (
-                [self.iteration_averages, count, delay_regs_used, self.cell_index]
-                + seq_pc
-                + durations
-            )
+            parameters = [
+                self.iteration_averages,
+                count,
+                delay_regs_used,
+                self.cell_index,
+                *seq_pc,
+                *durations,
+            ]
             self.qic.taskrunner.set_param_list(parameters)
 
             data = np.asarray(
@@ -725,7 +731,7 @@ class BaseExperiment:
                             (delay_reg + 1),
                             experiment_settings["delay_registers"][delay_reg],
                         )  # delay_reg + 1, so reg0 is not used
-                except:
+                except AttributeError:
                     pass
 
                 self.cell.sequencer.start_at(experiment_settings["sequencer_start"])
@@ -903,6 +909,7 @@ class ExperimentReadout:
     .. code-block:: python
 
         from qkit.measure.timedomain.measure_td import Measure_td
+
         # ...
         exp = BaseExperiment(qic)
         mtd = Measure_td(qic.sample, exp.readout)
@@ -913,7 +920,7 @@ class ExperimentReadout:
     def __init__(
         self,
         experiment: BaseExperiment,
-        tones: Optional[Union[int, List[float]]] = None,
+        tones: int | list[float] | None = None,
     ):
         self.experiment = experiment
 

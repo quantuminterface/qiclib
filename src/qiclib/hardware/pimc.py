@@ -28,11 +28,14 @@ A ready flag tells the user if the platform is fully initialized and ready to us
 This includes a check if all clocks are configured and running correctly, and if the
 connection to the converters is established and working.
 """
-from qiclib.hardware.platform_component import PlatformComponent
 
-from qiclib.packages.servicehub import ServiceHubCall
 import qiclib.packages.grpc.datatypes_pb2 as dt
+import qiclib.packages.grpc.pimc_pb2 as proto
 import qiclib.packages.grpc.pimc_pb2_grpc as grpc_stub
+from qiclib.hardware.platform_component import PlatformComponent
+from qiclib.packages.servicehub import ServiceHubCall
+
+_PIMC_SUPPORTED_VERSIONS = {3, 4}
 
 
 class PIMC(PlatformComponent):
@@ -52,10 +55,10 @@ class PIMC(PlatformComponent):
         self._stub = grpc_stub.PIMCServiceStub(self._conn.channel)
         self._info = self._get_info()
 
-        if self.core_version != 3:
+        if self.core_version not in _PIMC_SUPPORTED_VERSIONS:
             raise RuntimeError(
                 "PIMC component not supported! "
-                f"(Expected version 3 but got {self.core_version})"
+                f"(Got {self.core_version}, but supported versions are {', '.join(map(str, sorted(_PIMC_SUPPORTED_VERSIONS)))})"
                 " Maybe you have to use an older version of the Python client?"
             )
 
@@ -105,7 +108,7 @@ class PIMC(PlatformComponent):
 
     @property
     @ServiceHubCall(errormsg="Could not obtain the status of the Platform")
-    def status(self):
+    def status(self) -> proto.PIMCStatus:
         """Information about the status of the Platform.
 
         :return: A protobuf object containing the following properties:
@@ -120,17 +123,17 @@ class PIMC(PlatformComponent):
         return self._stub.GetStatus(dt.Empty())
 
     @property
-    def is_ready(self):
+    def is_ready(self) -> bool:
         """If the Platform is ready to use."""
         return self.status.ready
 
     @property
-    def is_busy(self):
+    def is_busy(self) -> bool:
         """If the Platform is currently busy."""
         return self.status.busy
 
     @property
-    def reset_done_flag(self):
+    def reset_done_flag(self) -> bool:
         """If a software reset was already called (necessary for some initializations)."""
         return self.status.rst_done
 

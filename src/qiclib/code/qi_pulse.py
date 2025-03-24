@@ -13,12 +13,16 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+from __future__ import annotations
+
 import logging
-from typing import Union, Callable, Any
+from typing import Any, Callable
+
 import numpy as np
+
 import qiclib.packages.utility as util
-from .qi_var_definitions import QiExpression, _QiVariableBase
-from .qi_types import QiType, _TypeDefiningUse
+from qiclib.code.qi_types import QiType, _TypeDefiningUse
+from qiclib.code.qi_var_definitions import QiExpression, _QiVariableBase
 
 
 class Shape(np.vectorize):
@@ -27,9 +31,7 @@ class Shape(np.vectorize):
     defined on the standardized interval [0,1).
     """
 
-    def __init__(
-        self, name: str, func: Callable[[float], float], *args: Any, **kwargs: Any
-    ):
+    def __init__(self, name: str, func: Callable[..., Any], *args: Any, **kwargs: Any):
         self.name = name
         super().__init__(func, *args, **kwargs)
 
@@ -46,7 +48,7 @@ class ShapeLibClass:
     Currently implemented: rect, gauss
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.zero = Shape("", lambda x: 0)
         self.rect = Shape("rect", lambda x: np.where(0 <= x < 1, 1, 0))
         self.gauss = (
@@ -89,22 +91,20 @@ class QiPulse:
     :param frequency: Frequency of your pulse, which is loaded to the PulseGen
     """
 
-    Type = Union[float, _QiVariableBase]
-
     def __init__(
         self,
-        length: Union[float, _QiVariableBase, str],
+        length: float | _QiVariableBase | str,
         shape: Shape = ShapeLib.rect,
-        amplitude: Union[float, _QiVariableBase] = 1.0,
-        phase: float = 0.0,
-        frequency: Union[float, QiExpression, None] = None,
+        amplitude: float | _QiVariableBase | QiExpression = 1.0,
+        phase: float | _QiVariableBase = 0.0,
+        frequency: float | QiExpression | None = None,
         hold=False,
     ):
         from .qi_jobs import QiCellProperty
 
         if isinstance(length, str):
             mode = length.lower()
-            if not mode in ["cw", "off"]:
+            if mode not in ["cw", "off"]:
                 raise ValueError("QiPulse with str length only accepts 'cw' or 'off'.")
             length = util.conv_cycles_to_time(1)
             if mode == "cw":
@@ -118,19 +118,26 @@ class QiPulse:
         self.shape = shape
         self.amplitude = amplitude
         self.phase = phase
-        self._length = length
+        if isinstance(self.phase, QiExpression):
+            self.phase._type_info.set_type(QiType.PHASE, _TypeDefiningUse.PULSE_PHASE)
         self.frequency = (
             QiExpression._from(frequency) if frequency is not None else None
         )
-        self.hold = hold
-        self.shift_phase = False
-
         if self.frequency is not None:
             self.frequency._type_info.set_type(
                 QiType.FREQUENCY, _TypeDefiningUse.PULSE_FREQUENCY
             )
-
         self.var_dict = {}
+
+        self._length = length
+
+        self.hold = hold
+        self.shift_phase = False
+
+        if isinstance(self.amplitude, QiExpression):
+            self.amplitude._type_info.set_type(
+                QiType.AMPLITUDE, _TypeDefiningUse.PULSE_AMPLITUDE
+            )
 
         if isinstance(length, QiExpression):
             length._type_info.set_type(QiType.TIME, _TypeDefiningUse.PULSE_LENGTH)
@@ -148,21 +155,39 @@ class QiPulse:
                 f"Pulse length exceeds possible wait time, cycles {util.conv_time_to_cycles(length)}"
             )
 
-        if isinstance(amplitude, _QiVariableBase):
-            raise NotImplementedError("Variable Amplitude not implemented yet")
-            # self.var_dict["amplitude"] = amplitude
+    @classmethod
+    def cw(
+        cls,
+        amplitude: float | _QiVariableBase | QiExpression = 1.0,
+        phase: float | _QiVariableBase = 0.0,
+        frequency: float | QiExpression | None = None,
+    ) -> QiPulse:
+        """
+        Generates a continuous wave pulse.
+        :param amplitude: Amplitude of the pulse.
+        :param phase: Phase of the pulse in deg. (i.e. 90 for pulse around y-axis of the bloch sphere)
+        :param frequency: Frequency of your pulse, which is loaded to the PulseGen
+        :return: QiPulse object
+        """
+        return cls("cw", ShapeLib.rect, amplitude, phase, frequency)
 
-    def _are_variable_length(self, other) -> bool:
+    @classmethod
+    def off(cls) -> QiPulse:
+        """
+        Turns a continuous wave pulse off.
+        It is only sensible to use this pulse after using `QiPulse.cw()`.
+        """
+        return cls("off")
+
+    def _are_variable_length(self, other: QiPulse) -> bool:
         return self.is_variable_length and other.is_variable_length
 
-    def _are_same_length(self, other) -> bool:
-        return (
-            not isinstance(self._length, _QiVariableBase)
-            and not isinstance(other._length, _QiVariableBase)
-            and (self._length is other._length)
-        )
+    def _are_same_length(self, other: QiPulse) -> bool:
+        if isinstance(self._length, QiExpression):
+            return self._length._equal_syntax(other._length)
+        return self._length == other._length
 
-    def _are_same_amplitude(self, other) -> bool:
+    def _are_same_amplitude(self, other: QiPulse) -> bool:
         return (
             not isinstance(self.amplitude, _QiVariableBase)
             and not isinstance(other.amplitude, _QiVariableBase)
@@ -170,14 +195,13 @@ class QiPulse:
         )
 
     def __eq__(self, o: object) -> bool:
-        equal_length: bool = isinstance(o, QiPulse) and (
-            self._are_variable_length(o) or self._are_same_length(o)
-        )
-        equal_amplitude: bool = isinstance(o, QiPulse) and self._are_same_amplitude(o)
+        if not isinstance(o, QiPulse):
+            return False
+        equal_length = self._are_variable_length(o) or self._are_same_length(o)
+        equal_amplitude = self._are_same_amplitude(o)
 
         return (
-            isinstance(o, QiPulse)
-            and equal_length
+            equal_length
             and equal_amplitude
             and (self.hold == o.hold)
             and (self.shape == o.shape)
@@ -197,15 +221,20 @@ class QiPulse:
 
         :return: envelope of the pulse as numpy array.
         """
-        from .qi_jobs import QiCellProperty
-
-        if self.is_variable_length:
-            # variable pulses are hold till ended by another pulse, so no need to use correct length
-            return np.array([self.amplitude] * 4)
+        from qiclib.code.qi_jobs import QiCellProperty
 
         length = (
             self._length() if isinstance(self._length, QiCellProperty) else self._length
         )
+
+        if isinstance(length, _QiVariableBase):
+            # variable pulses are hold till ended by another pulse, so no need to use correct length
+            return np.array([self.amplitude] * 4)
+
+        if not isinstance(length, (float, int)):
+            raise ValueError(
+                f"spcified length must be a number (was {type(length).__name__})"
+            )
 
         if (
             util.conv_time_to_cycles(length) >= 2**32
@@ -214,7 +243,13 @@ class QiPulse:
                 f"Pulse length exceeds possible wait time, cycles {util.conv_time_to_cycles(length)}"
             )
 
-        amplitude = self.amplitude
+        if isinstance(
+            self.amplitude, _QiVariableBase
+        ):  # amplitude must be set to 1 for variable amplitude and take the value of self.amplitude otherwise
+            amplitude = 1
+        else:
+            amplitude = self.amplitude
+
         timestep = 1.0 / samplerate
 
         if length < timestep / 2.0:
@@ -226,12 +261,12 @@ class QiPulse:
             return np.zeros(0)
 
         time_fractions = np.arange(0, length, timestep) / length
-        envelope = amplitude * self.shape(time_fractions)
 
+        envelope = amplitude * self.shape(time_fractions)
         return envelope
 
     @property
-    def length(self):
+    def length(self) -> _QiVariableBase:
         return self.var_dict.get("length", self._length)
 
     @property
@@ -273,7 +308,7 @@ def _equal(a, b):
     and therefore has an overloaded __eq__ function, we can not rely
     on the normal comparison operator.
     """
-    from .qi_var_definitions import _QiConstValue, QiCellProperty
+    from .qi_var_definitions import QiCellProperty, _QiConstValue
 
     if isinstance(a, QiExpression):
         if isinstance(a, int):

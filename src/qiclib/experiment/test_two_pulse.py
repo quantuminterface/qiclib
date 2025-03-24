@@ -14,11 +14,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """File providing TestTwoPulse QiController Experiment."""
-import warnings
-from qiclib.experiment.base import BaseExperiment
 
-from qiclib.coding.sequencercode import SequencerCode
+import warnings
+
 import qiclib.packages.utility as util
+from qiclib.coding.sequencercode import SequencerCode
+from qiclib.experiment.base import BaseExperiment
 
 
 class TestTwoPulse(BaseExperiment):

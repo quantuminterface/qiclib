@@ -13,60 +13,28 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-import unittest
+import pytest
+
 import qiclib.code.qi_visitor as qv
-from qiclib.code.qi_pulse import QiPulse
+from qiclib.code.qi_command import AssignCommand
 from qiclib.code.qi_jobs import (
-    QiSample,
-    QiVariable,
+    Assign,
+    ForRange,
+    If,
+    Parallel,
     Play,
     PlayReadout,
+    QiCells,
     QiJob,
+    QiSample,
+    QiVariable,
     Recording,
     Wait,
-    Assign,
-    If,
-    ForRange,
-    Parallel,
-    QiCells,
 )
-from qiclib.code.qi_jobs import cQiAssign
+from qiclib.code.qi_pulse import QiPulse
 
 
-class VariableAssignmentTestCase(unittest.TestCase):
-    def setUp(self):
-        with QiJob() as self.job:
-            self.q = QiCells(4)
-            self.x = QiVariable(int)
-            self.y = QiVariable(int)
-            self.z = QiVariable(int)
-
-            self.y_time = QiVariable()
-
-            Assign(self.x, 2)
-            Assign(self.y, 1)
-            Assign(self.z, self.x + self.y)
-
-            Assign(self.y_time, self.y * 4e-9)
-
-            with If(self.x > self.z) as self.if_test:
-                Play(self.q[0], QiPulse(length=self.y_time))
-                Wait(self.q[1], delay=50e-9)
-
-                with Parallel() as self.parallel_test:
-                    Play(self.q[0], QiPulse(length=30e-9))
-                    PlayReadout(self.q[0], QiPulse(length=30e-9))
-
-            Play(self.q[2], QiPulse(length=self.y_time))
-
-        with QiJob() as self.job2:
-            self.p = QiCells(4)
-            self.v = QiVariable()
-
-            Assign(self.v, 8e-9)
-
-            Wait(self.p[0], self.v)
-
+class TestVariableAssignment:
     def assign_cell_to_CM(self, commands):
         contained_cells_visitor = qv.QiCMContainedCellVisitor()
         for command in commands:
@@ -78,84 +46,108 @@ class VariableAssignmentTestCase(unittest.TestCase):
             command.accept(cell_to_variable_visitor)
 
     def test_contained_variables(self):
+        with QiJob() as job:
+            q = QiCells(4)
+            x = QiVariable(int)
+            y = QiVariable(int)
+            z = QiVariable(int)
+
+            y_time = QiVariable()
+
+            Assign(x, 2)
+            Assign(y, 1)
+            Assign(z, x + y)
+
+            Assign(y_time, y * 4e-9)
+
+            with If(x > z) as if_test:
+                Play(q[0], QiPulse(length=y_time))
+                Wait(q[1], delay=50e-9)
+
+                with Parallel() as parallel_test:
+                    Play(q[0], QiPulse(length=30e-9))
+                    PlayReadout(q[0], QiPulse(length=30e-9))
+
+            Play(q[2], QiPulse(length=y_time))
+
         # test if context managers recognize used cells inside their body
-        self.assign_cell_to_CM(self.job.commands)
+        self.assign_cell_to_CM(job.commands)
 
-        self.assertIn(self.q[0], self.if_test._relevant_cells)
-        self.assertIn(self.q[1], self.if_test._relevant_cells)
+        assert job.cells[0] in if_test._relevant_cells
+        assert job.cells[1] in if_test._relevant_cells
 
-        self.assertNotIn(self.q[2], self.if_test._relevant_cells)
-        self.assertNotIn(self.q[3], self.if_test._relevant_cells)
+        assert job.cells[2] not in if_test._relevant_cells
+        assert job.cells[3] not in if_test._relevant_cells
 
-        self.assertIn(self.q[0], self.parallel_test._relevant_cells)
-        self.assertNotIn(self.q[1], self.parallel_test._relevant_cells)
+        assert job.cells[0] in parallel_test._relevant_cells
+        assert job.cells[1] not in parallel_test._relevant_cells
 
-    def test_relevant_variables_If(self):
-        # test if context managers recognize used QiVariables
-        self.assign_cell_to_CM(self.job.commands)
+        assert if_test.is_variable_relevant(x)
+        assert not (if_test.is_variable_relevant(y))
+        assert if_test.is_variable_relevant(z)
 
-        self.assertTrue(self.if_test.is_variable_relevant(self.x))
-        self.assertFalse(self.if_test.is_variable_relevant(self.y))
-        self.assertTrue(self.if_test.is_variable_relevant(self.z))
-
-    def test_relevant_variables_Assign(self):
         # variable is relevant only if it is needed for the calculation; so the assigned variable is not relevant
-        test_assign = cQiAssign(self.z, self.x + self.y)
+        test_assign = AssignCommand(z, x + y)
 
-        self.assertTrue(test_assign.is_variable_relevant(self.x))
-        self.assertTrue(test_assign.is_variable_relevant(self.y))
-        self.assertFalse(test_assign.is_variable_relevant(self.z))
+        assert test_assign.is_variable_relevant(x)
+        assert test_assign.is_variable_relevant(y)
+        assert not (test_assign.is_variable_relevant(z))
+
+        self.assign_variables_to_cell(job.commands)
+
+        assert q[0] in x._relevant_cells
+        assert q[1] in x._relevant_cells
+        assert q[2] not in x._relevant_cells
+        assert q[3] not in x._relevant_cells
+
+        assert q[0] in y._relevant_cells
+        assert q[1] in y._relevant_cells
+        assert q[2] in y._relevant_cells
+        assert q[3] not in y._relevant_cells
+
+        assert q[0] in z._relevant_cells
+        assert q[1] in z._relevant_cells
+        assert q[2] not in z._relevant_cells
+        assert q[3] not in z._relevant_cells
+
+        # The other way round as well
+        assert x in q[0]._relevant_vars
+        assert x in q[1]._relevant_vars
+        assert x not in q[2]._relevant_vars
+        assert x not in q[3]._relevant_vars
+
+        assert y in q[0]._relevant_vars
+        assert y in q[1]._relevant_vars
+        assert y in q[2]._relevant_vars
+        assert y not in q[3]._relevant_vars
+
+        assert z in q[0]._relevant_vars
+        assert z in q[1]._relevant_vars
+        assert z not in q[2]._relevant_vars
+        assert z not in q[3]._relevant_vars
 
     def test_assign_variables_to_cell_simple(self):
-        # Test if QiVariables are only allocated to relevant cells
-        self.assign_variables_to_cell(self.job2.commands)
+        with QiJob() as job:
+            p = QiCells(4)
+            v = QiVariable()
 
-        self.assertIn(self.p[0], self.v._relevant_cells)
-        self.assertNotIn(self.p[1], self.v._relevant_cells)
-        self.assertNotIn(self.p[2], self.v._relevant_cells)
-        self.assertNotIn(self.p[3], self.v._relevant_cells)
+            Assign(v, 8e-9)
+
+            Wait(p[0], v)
+
+        # Test if QiVariables are only allocated to relevant cells
+        self.assign_variables_to_cell(job.commands)
+
+        assert p[0] in v._relevant_cells
+        assert p[1] not in v._relevant_cells
+        assert p[2] not in v._relevant_cells
+        assert p[3] not in v._relevant_cells
 
         # The other way round as well
-        self.assertIn(self.v, self.p[0]._relevant_vars)
-        self.assertNotIn(self.v, self.p[1]._relevant_vars)
-        self.assertNotIn(self.v, self.p[2]._relevant_vars)
-        self.assertNotIn(self.v, self.p[3]._relevant_vars)
-
-    def test_assign_variables_to_cell(self):
-        # Test if QiVariables are only allocated to relevant cells
-        self.assign_cell_to_CM(self.job.commands)
-        self.assign_variables_to_cell(self.job.commands)
-
-        self.assertIn(self.q[0], self.x._relevant_cells)
-        self.assertIn(self.q[1], self.x._relevant_cells)
-        self.assertNotIn(self.q[2], self.x._relevant_cells)
-        self.assertNotIn(self.q[3], self.x._relevant_cells)
-
-        self.assertIn(self.q[0], self.y._relevant_cells)
-        self.assertIn(self.q[1], self.y._relevant_cells)
-        self.assertIn(self.q[2], self.y._relevant_cells)
-        self.assertNotIn(self.q[3], self.y._relevant_cells)
-
-        self.assertIn(self.q[0], self.z._relevant_cells)
-        self.assertIn(self.q[1], self.z._relevant_cells)
-        self.assertNotIn(self.q[2], self.z._relevant_cells)
-        self.assertNotIn(self.q[3], self.z._relevant_cells)
-
-        # The other way round as well
-        self.assertIn(self.x, self.q[0]._relevant_vars)
-        self.assertIn(self.x, self.q[1]._relevant_vars)
-        self.assertNotIn(self.x, self.q[2]._relevant_vars)
-        self.assertNotIn(self.x, self.q[3]._relevant_vars)
-
-        self.assertIn(self.y, self.q[0]._relevant_vars)
-        self.assertIn(self.y, self.q[1]._relevant_vars)
-        self.assertIn(self.y, self.q[2]._relevant_vars)
-        self.assertNotIn(self.y, self.q[3]._relevant_vars)
-
-        self.assertIn(self.z, self.q[0]._relevant_vars)
-        self.assertIn(self.z, self.q[1]._relevant_vars)
-        self.assertNotIn(self.z, self.q[2]._relevant_vars)
-        self.assertNotIn(self.z, self.q[3]._relevant_vars)
+        assert v in p[0]._relevant_vars
+        assert v not in p[1]._relevant_vars
+        assert v not in p[2]._relevant_vars
+        assert v not in p[3]._relevant_vars
 
     def test_assign_variables_if_assign(self):
         with QiJob() as assign_test:
@@ -165,58 +157,50 @@ class VariableAssignmentTestCase(unittest.TestCase):
 
             with If(var2 == 0) as if_test:
                 Assign(var1, 2)
-            with ForRange(var2, 5, var1, -1) as for_test:
+            with ForRange(var2, 5, var1, -1):
                 Wait(q[0], 24e-9)
 
         self.assign_cell_to_CM(assign_test.commands)
         self.assign_variables_to_cell(assign_test.commands)
         self.assign_cell_to_CM(assign_test.commands)
 
-        self.assertIn(q[0], if_test._relevant_cells)
+        assert q[0] in if_test._relevant_cells
 
 
-class RecordingLengthTest(unittest.TestCase):
+class TestRecordingLength:
     def test_length_OK(self):
-        try:
-            with QiJob() as rec_test:
-                q = QiCells(2)
-                var1 = QiVariable(int)
-                with If(var1 == 1):
-                    with Parallel():
-                        Recording(q[0], 13e-9, 12e-9)
-                    with Parallel():
-                        PlayReadout(q[0], QiPulse(50e-9))
-                        Recording(q[0], 13e-9, 12e-9)
+        with QiJob() as rec_test:
+            q = QiCells(2)
+            var1 = QiVariable(int)
+            with If(var1 == 1):
+                with Parallel():
+                    Recording(q[0], 13e-9, 12e-9)
+                with Parallel():
+                    PlayReadout(q[0], QiPulse(50e-9))
+                    Recording(q[0], 13e-9, 12e-9)
 
-                Recording(q[1], 42e-9, 43e-9)
-
-        except Exception as e:
-            self.fail("test_length_OK raised exception " + str(e))
+            Recording(q[1], 42e-9, 43e-9)
 
         rec_test._run_analyses()
 
-        self.assertEqual(rec_test.cells[0].recording_length, 13e-9)
-        self.assertEqual(rec_test.cells[0].initial_recording_offset, 12e-9)
+        assert rec_test.cells[0].recording_length == 13e-9
+        assert rec_test.cells[0].initial_recording_offset == 12e-9
 
-        self.assertEqual(rec_test.cells[1].recording_length, 42e-9)
-        self.assertEqual(rec_test.cells[1].initial_recording_offset, 43e-9)
+        assert rec_test.cells[1].recording_length == 42e-9
+        assert rec_test.cells[1].initial_recording_offset == 43e-9
 
     def test_length_properties_OK(self):
-        try:
-            with QiJob() as rec_test:
-                q = QiCells(2)
-                var1 = QiVariable(int)
-                with If(var1 == 1):
-                    with Parallel():
-                        Recording(q[0], q[0]["rec"], q[0]["offset"])
-                    with Parallel():
-                        PlayReadout(q[0], QiPulse(50e-9))
-                        Recording(q[0], q[0]["rec"], q[0]["offset"])
+        with QiJob() as rec_test:
+            q = QiCells(2)
+            var1 = QiVariable(int)
+            with If(var1 == 1):
+                with Parallel():
+                    Recording(q[0], q[0]["rec"], q[0]["offset"])
+                with Parallel():
+                    PlayReadout(q[0], QiPulse(50e-9))
+                    Recording(q[0], q[0]["rec"], q[0]["offset"])
 
-                Recording(q[1], q[1]["rec"], q[1]["offset"])
-
-        except Exception as e:
-            self.fail("test_length_properties_OK raised exception " + str(e))
+            Recording(q[1], q[1]["rec"], q[1]["offset"])
 
         sample = QiSample(2)
         sample[0]["rec"] = 42e-9
@@ -228,17 +212,18 @@ class RecordingLengthTest(unittest.TestCase):
 
         rec_test._run_analyses()
 
-        self.assertEqual(rec_test.cells[0].recording_length, 42e-9)
-        self.assertEqual(rec_test.cells[0].initial_recording_offset, 43e-9)
+        assert rec_test.cells[0].recording_length == 42e-9
+        assert rec_test.cells[0].initial_recording_offset == 43e-9
 
-        self.assertEqual(rec_test.cells[1].recording_length, 44e-9)
-        self.assertEqual(rec_test.cells[1].initial_recording_offset, 45e-9)
+        assert rec_test.cells[1].recording_length == 44e-9
+        assert rec_test.cells[1].initial_recording_offset == 45e-9
 
     def test_length_properties_Error(self):
-        with self.assertRaisesRegex(
-            RuntimeError, r"Cell \d+: Multiple definitions of recording length used\."
+        with pytest.raises(
+            RuntimeError,
+            match=r"Cell \d+: Multiple definitions of recording length used\.",
         ):
-            with QiJob() as rec_test:
+            with QiJob():
                 q = QiCells(1)
                 var1 = QiVariable(int)
                 with If(var1 == 1):
@@ -249,10 +234,11 @@ class RecordingLengthTest(unittest.TestCase):
                         Recording(q[0], q[0]["rec2"], q[0]["offset"])
 
     def test_length_Error(self):
-        with self.assertRaisesRegex(
-            RuntimeError, r"Cell \d+: Multiple definitions of recording length used\."
+        with pytest.raises(
+            RuntimeError,
+            match=r"Cell \d+: Multiple definitions of recording length used\.",
         ):
-            with QiJob() as rec_test:
+            with QiJob():
                 q = QiCells(1)
                 var1 = QiVariable(int)
                 with If(var1 == 1):
@@ -273,8 +259,8 @@ class RecordingLengthTest(unittest.TestCase):
                     PlayReadout(q[0], QiPulse(50e-9))
                     Recording(q[0], 13e-9, 120e-9)
 
-        with self.assertRaisesRegex(
+        with pytest.raises(
             RuntimeError,
-            "Parallel Blocks with multiple Recording instructions with different offsets are not supported.",
+            match="Parallel Blocks with multiple Recording instructions with different offsets are not supported.",
         ):
             rec_test._run_analyses()

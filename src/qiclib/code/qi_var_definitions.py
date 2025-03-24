@@ -21,13 +21,17 @@ The base class of every expression is :class:`~.QiExpression`.
 (The name of this module used to only be concerned with variables and is somewhat misleading nowadays)
 """
 
-from abc import abstractmethod
-from typing import List, Union, Set, Optional
+from __future__ import annotations
+
 import itertools
+from abc import abstractmethod
+from collections.abc import Set
 from enum import Enum
-from qiclib.code.qi_visitor import QiExpressionVisitor
+
 import qiclib.packages.utility as util
-from .qi_types import QiType, _TypeInformation, _TypeDefiningUse, _IllegalTypeReason
+from qiclib.code.qi_visitor import QiExpressionVisitor
+
+from .qi_types import QiType, _IllegalTypeReason, _TypeDefiningUse, _TypeInformation
 
 
 class QiOp(Enum):
@@ -50,8 +54,7 @@ class QiOpCond(Enum):
     EQ = "=="
     NE = "!="
 
-    @staticmethod
-    def invert(condition):
+    def invert(self):
         inverted = {
             QiOpCond.EQ: QiOpCond.NE,
             QiOpCond.NE: QiOpCond.EQ,
@@ -60,25 +63,25 @@ class QiOpCond(Enum):
             QiOpCond.GT: QiOpCond.LE,
             QiOpCond.GE: QiOpCond.LT,
         }
-        inv = inverted.get(condition)
+        inv = inverted.get(self)
         if inv is None:
-            raise RuntimeError("Condition not found: " + str(condition))
+            raise RuntimeError("Condition not found: " + str(self))
         return inv
 
 
-class QiVariableSet:
+class QiVariableSet(Set):
     """Class provides Set functionality for QiVariables.
     QiVariables overwrite comparison operations to build operation trees, to still allow comparisons ids are used.
     """
 
     def __init__(self) -> None:
-        self._var_list: List["_QiVariableBase"] = []
-        self._var_id_list: List[int] = []
+        self._var_list: list[_QiVariableBase] = []
+        self._var_id_list: list[int] = []
 
     def __contains__(self, x):
         return x.id in self._var_id_list
 
-    def add(self, x: "_QiVariableBase"):
+    def add(self, x: _QiVariableBase):
         if x.id not in self._var_id_list:
             self._var_id_list.append(x.id)
             self._var_list.append(x)
@@ -88,16 +91,7 @@ class QiVariableSet:
             self.add(var)
 
     def __iter__(self):
-        self.n = 0
-        return self
-
-    def __next__(self):
-        if self.n < len(self._var_list):
-            var = self._var_list[self.n]
-            self.n += 1
-            return var
-        else:
-            raise StopIteration
+        return iter(self._var_list)
 
     def __len__(self):
         return len(self._var_list)
@@ -146,7 +140,7 @@ class QiExpression:
             self._contained_variables.update(self.val1.contained_variables)
             self._contained_variables.update(self.val2.contained_variables)
 
-    def _equal_syntax(self, other: "QiExpression") -> bool:
+    def _equal_syntax(self, other: QiExpression) -> bool:
         raise NotImplementedError(
             f"{self.__class__} has not implemented `_equal_syntax`. This is a bug."
         )
@@ -280,10 +274,10 @@ class _QiVariableBase(QiExpression):
     def __init__(
         self,
         type: QiType,
-        value: Optional[Union[int, float]] = None,
+        value: int | float | None = None,
         name=None,
     ):
-        from .qi_jobs import QiCell
+        from qiclib.code.qi_jobs import QiCell
 
         assert isinstance(type, QiType)
         assert value is None or isinstance(value, (int, float))
@@ -296,7 +290,7 @@ class _QiVariableBase(QiExpression):
         self.value = value
 
         self._value = value
-        self._relevant_cells: Set[QiCell] = set()
+        self._relevant_cells: set[QiCell] = set()
         self.id = next(_QiVariableBase.id_iter)
         self.str_id = next(_QiVariableBase.str_id_iter)
 
@@ -315,7 +309,7 @@ class _QiVariableBase(QiExpression):
     def accept(self, visitor: QiExpressionVisitor):
         visitor.visit_variable(self)
 
-    def _equal_syntax(self, other: "QiExpression") -> bool:
+    def _equal_syntax(self, other: QiExpression) -> bool:
         return isinstance(other, _QiVariableBase) and self.id == other.id
 
     def __hash__(self) -> int:
@@ -332,7 +326,7 @@ class _QiConstValue(QiExpression):
     it has been converted to the integer representation used by the sequencer.
     """
 
-    def __init__(self, value: Union[int, float]):
+    def __init__(self, value: int | float):
         super().__init__()
 
         self._given_value = value  # Value given to the constructor. Is interpreted differently depending on the type.
@@ -340,7 +334,8 @@ class _QiConstValue(QiExpression):
         # Constant STATE values can only be 0 or 1, therefore we forbid QiType.STATE if we have a different value.
         if isinstance(self._given_value, float) or self._given_value not in [1, 0]:
             self._type_info.add_illegal_type(
-                QiType.STATE, _IllegalTypeReason.INVALID_STATE_CONSTANT
+                QiType.STATE,
+                _IllegalTypeReason.INVALID_STATE_CONSTANT,
             )
 
         if isinstance(self._given_value, float):
@@ -350,7 +345,12 @@ class _QiConstValue(QiExpression):
 
     @property
     def float_value(self):
-        assert self.type in (QiType.TIME or self.type, QiType.FREQUENCY)
+        assert self.type in (
+            QiType.TIME or self.type,
+            QiType.FREQUENCY,
+            QiType.PHASE,
+            QiType.AMPLITUDE,
+        )
         return self._given_value
 
     @property
@@ -362,10 +362,18 @@ class _QiConstValue(QiExpression):
         to such an fixpoint value.
         The correct conversion depends on the type.
         """
-        if self.type in (QiType.NORMAL, QiType.STATE, QiType.UNKNOWN):
+        if self.type in (
+            QiType.NORMAL,
+            QiType.STATE,
+            QiType.UNKNOWN,
+        ):
             return self._given_value
         elif self.type == QiType.TIME:
             return int(util.conv_time_to_cycles(self._given_value, "ceil"))
+        elif self.type == QiType.PHASE:
+            return int(util.conv_phase_to_nco_phase(self._given_value))
+        elif self.type == QiType.AMPLITUDE:
+            return int(util.conv_amplitude_to_int(self._given_value))
         else:
             assert self.type == QiType.FREQUENCY
             return util.conv_freq_to_nco_phase_inc(self._given_value)
@@ -377,12 +385,17 @@ class _QiConstValue(QiExpression):
     def accept(self, visitor: QiExpressionVisitor):
         visitor.visit_constant(self)
 
-    def _equal_syntax(self, other: "QiExpression") -> bool:
+    def _equal_syntax(self, other: QiExpression) -> bool:
         assert QiType.UNKNOWN not in (self.type, other.type)
         return isinstance(other, _QiConstValue) and self.value == other.value
 
     def __str__(self):
-        if self.type in (QiType.TIME, QiType.FREQUENCY):
+        if self.type in (
+            QiType.TIME,
+            QiType.FREQUENCY,
+            QiType.AMPLITUDE,
+            QiType.PHASE,
+        ):
             value = self.float_value
         elif self.type in (QiType.NORMAL, QiType.STATE, QiType.UNKNOWN):
             value = self.value
@@ -400,33 +413,45 @@ class QiNormalValue(_QiConstValue):
 
 
 class QiTimeValue(_QiConstValue):
-    def __init__(self, value: Union[int, float]):
+    def __init__(self, value: int | float):
         super().__init__(value)
         self._type_info.set_type(QiType.TIME, _TypeDefiningUse.VALUE_DEFINITION)
 
 
 class QiFrequencyValue(_QiConstValue):
-    def __init__(self, value: Union[int, float]):
+    def __init__(self, value: int | float):
         super().__init__(value)
         self._type_info.set_type(QiType.FREQUENCY, _TypeDefiningUse.VALUE_DEFINITION)
 
 
-class QiCellProperty(QiExpression):
-    """When describing experiments, properties of cells might not yet be defined. Instead a QiCellProperty object will be generated.
-    This object can be used as length definition in cQiWait commands and QiPulse"""
+class QiPhaseValue(_QiConstValue):
+    def __init__(self, value: int | float):
+        super().__init__(value)
+        self._type_info.set_type(QiType.PHASE, _TypeDefiningUse.VALUE_DEFINITION)
 
-    def __init__(self, cell, name):
+
+class QiAmplitudeValue(_QiConstValue):
+    def __init__(self, value: int | float):
+        super().__init__(value)
+        self._type_info.set_type(QiType.AMPLITUDE, _TypeDefiningUse.VALUE_DEFINITION)
+
+
+class QiCellProperty(QiExpression):
+    """When describing experiments, properties of cells might not yet be defined.Instead, a QiCellProperty object will be generated.
+    This object can be used as length definition in WaitCommand and QiPulse"""
+
+    def __init__(self, cell, name: str):
         super().__init__()
         from .qi_jobs import QiCell
 
-        self.name: str = name
+        self.name = name
         self.cell: QiCell = cell
         self.operations = lambda val: val
         self.opcode = "x"
 
     @property
     def opcode_p(self):
-        """Old opcode in parantheses for building new opcode"""
+        """Old opcode in parentheses for building new opcode"""
         return self.opcode if self.opcode == "x" else f"({self.opcode})"
 
     def resolve_equal(self, o: object) -> bool:
@@ -456,17 +481,25 @@ class QiCellProperty(QiExpression):
             return self()
         elif self.type == QiType.STATE:
             return self()
+        elif self.type == QiType.PHASE:
+            return util.conv_phase_to_nco_phase(self())
+        elif self.type == QiType.AMPLITUDE:
+            return util.conv_amplitude_to_int(self())
         else:
             raise RuntimeError(
-                "Mising type information to resolve value to convert to a machine value."
+                "Missing type information to resolve value to convert to a machine value."
             )
 
     @property
     def float_value(self):
-        assert self.type in (QiType.TIME, QiType.FREQUENCY)
+        assert self.type in (
+            QiType.TIME,
+            QiType.FREQUENCY,
+            QiType.PHASE,
+            QiType.AMPLITUDE,
+        )
         return self()
 
-    @abstractmethod
     def accept(self, visitor: QiExpressionVisitor):
         visitor.visit_cell_property(self)
 
@@ -474,7 +507,7 @@ class QiCellProperty(QiExpression):
     def contained_variables(self):
         return QiVariableSet()
 
-    def _equal_syntax(self, other: "QiExpression") -> bool:
+    def _equal_syntax(self, other: QiExpression) -> bool:
         return isinstance(other, QiCellProperty) and self.resolve_equal(other)
 
     def move_add_op_to_property(self, x: _QiConstValue):
@@ -567,7 +600,7 @@ class _QiCalcBase(QiExpression):
     def accept(self, visitor: QiExpressionVisitor):
         visitor.visit_calc(self)
 
-    def _equal_syntax(self, other: "QiExpression") -> bool:
+    def _equal_syntax(self, other: QiExpression) -> bool:
         return (
             isinstance(other, _QiCalcBase)
             and self.op == other.op
@@ -576,15 +609,7 @@ class _QiCalcBase(QiExpression):
         )
 
     def __str__(self):
-        return (
-            "("
-            + self.val1.__str__()
-            + " "
-            + self.op.value
-            + " "
-            + self.val2.__str__()
-            + ")"
-        )
+        return f"({self.val1} {self.op.value} {self.val2})"
 
 
 class QiCondition:

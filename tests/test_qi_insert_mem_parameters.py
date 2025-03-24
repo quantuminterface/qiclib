@@ -13,16 +13,22 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+import pytest
 
 from qiclib.code.analysis.qi_insert_mem_parameters import (
-    READOUT_PULSE_FREQUENCY_ADDRESS,
-    insert_recording_offset_store_commands,
-    insert_manipulation_pulse_frequency_store_commands,
-    insert_readout_pulse_frequency_store_commands,
     MANIPULATION_PULSE_FREQUENCY_ADDRESS,
+    READOUT_PULSE_FREQUENCY_ADDRESS,
+    replace_variable_assignment_with_store_commands,
 )
-import unittest
-from qiclib.code.qi_pulse import QiPulse
+from qiclib.code.qi_command import (
+    DeclareCommand,
+    ForRangeCommand,
+    IfCommand,
+    MemStoreCommand,
+    PlayCommand,
+    PlayReadoutCommand,
+    RecordingCommand,
+)
 from qiclib.code.qi_jobs import (
     Assign,
     Else,
@@ -31,31 +37,29 @@ from qiclib.code.qi_jobs import (
     Parallel,
     Play,
     PlayReadout,
+    QiAmplitudeVariable,
     QiCells,
     QiJob,
+    QiPhaseVariable,
     QiTimeVariable,
     QiVariable,
     Recording,
     Wait,
-    cQiDeclare,
-    cQiMemStore,
-    cQiPlay,
-    cQiPlayReadout,
-    cQiRecording,
 )
+from qiclib.code.qi_pulse import QiPulse
 
 
-class RecordingOffsetInsertionTest(unittest.TestCase):
+class TestRecordingOffsetInsertion:
     def test_somewhat_complex_example(self):
         with QiJob() as job:
             cells = QiCells(2)
 
-            # cQiMemStore(cell[1], 4.0)
-            # cQiMemStore(cell[0], 2.0)
+            # MemStoreCommand(cell[1], 4.0)
+            # MemStoreCommand(cell[0], 2.0)
             x = QiVariable(name="X")
             Recording(cells[0], 20e-9, offset=2.0)
 
-            # cQiMemStore(cell[0], 4.0)
+            # MemStoreCommand(cell[0], 4.0)
             with If(x == 12):
                 Recording(cells[1], 20e-9, offset=2.0)
             with Else():
@@ -64,30 +68,30 @@ class RecordingOffsetInsertionTest(unittest.TestCase):
             Recording(cells[0], 20e-9, offset=4.0)
             t = QiVariable(name="T")
             with ForRange(t, 0, 100e-9, 8e-9):
-                # cQiMemStore(cell[0], t)
+                # MemStoreCommand(cell[0], t)
                 Recording(cells[0], 20e-9, offset=t)
 
-                # cQiMemStore(cell[0], 6.0)
+                # MemStoreCommand(cell[0], 6.0)
 
                 with ForRange(t, 0, 100e-9, 8e-9):
                     Recording(cells[0], 20e-9, offset=6.0)
 
-        insert_recording_offset_store_commands(job)
+        replace_variable_assignment_with_store_commands(job)
 
-        self.assertEqual(cells[1].initial_recording_offset, 2.0)
+        assert cells[1].initial_recording_offset == 2.0
 
-        self.assertIsInstance(job.commands[0], cQiMemStore)
-        self.assertEqual(job.commands[0].value.float_value, 2.0)
+        assert isinstance(job.commands[0], MemStoreCommand)
+        assert job.commands[0].value.float_value == 2.0
 
-        self.assertIsInstance(job.commands[3], cQiMemStore)
-        self.assertEqual(job.commands[3].value.float_value, 4.0)
+        assert isinstance(job.commands[3], MemStoreCommand)
+        assert job.commands[3].value.float_value == 4.0
 
-        self.assertIsInstance(job.commands[7], ForRange)
-        self.assertIsInstance(job.commands[7].body[0], cQiMemStore)
-        self.assertIs(job.commands[7].body[0].value, t)
+        assert isinstance(job.commands[7], ForRangeCommand)
+        assert isinstance(job.commands[7].body[0], MemStoreCommand)
+        assert job.commands[7].body[0].value is t
 
-        self.assertIsInstance(job.commands[7].body[2], cQiMemStore)
-        self.assertEqual(job.commands[7].body[2].value.float_value, 6.0)
+        assert isinstance(job.commands[7].body[2], MemStoreCommand)
+        assert job.commands[7].body[2].value.float_value == 6.0
 
     def test_other_somewhat_complex_example(self):
         # This test demonstrates some flaws in the current implementation.
@@ -110,40 +114,40 @@ class RecordingOffsetInsertionTest(unittest.TestCase):
             b = QiTimeVariable(name="B", value=4)
 
             with ForRange(b, 0, 100e-9):
-                # cQiMemStore(cell[0], a)
+                # MemStoreCommand(cell[0], a)
 
                 Recording(cells[0], 1, offset=a)
 
                 with If(a == 4):
-                    # cQiMemStore(cell[0], 0.0)
+                    # MemStoreCommand(cell[0], 0.0)
                     Recording(cells[0], 1, offset=0)
-                    # cQiMemStore(cell[0], a)
+                    # MemStoreCommand(cell[0], a)
 
                 with ForRange(b, 0, 100e-9):
                     Recording(cells[0], 1, offset=a)
 
-            # cQiMemStore(cells[0], 24e-9)
+            # MemStoreCommand(cells[0], 24e-9)
             Recording(cells[0], 1, offset=24e-9)
 
-        insert_recording_offset_store_commands(job)
+        replace_variable_assignment_with_store_commands(job)
 
         print(job)
 
-        self.assertEqual(cells[0].initial_recording_offset, 0.0)
+        assert cells[0].initial_recording_offset == 0.0
 
-        self.assertIsInstance(job.commands[4], ForRange)
-        self.assertIsInstance(job.commands[4].body[0], cQiMemStore)
-        self.assertIsInstance(job.commands[4].body[2], If)
+        assert isinstance(job.commands[4], ForRangeCommand)
+        assert isinstance(job.commands[4].body[0], MemStoreCommand)
+        assert isinstance(job.commands[4].body[2], IfCommand)
 
         if_cmd = job.commands[4].body[2]
 
-        self.assertIsInstance(if_cmd.body[0], cQiMemStore)
-        self.assertEqual(if_cmd.body[0].value.float_value, 0.0)
-        self.assertIsInstance(if_cmd.body[2], cQiMemStore)
-        self.assertIs(if_cmd.body[2].value, a)
+        assert isinstance(if_cmd.body[0], MemStoreCommand)
+        assert if_cmd.body[0].value.float_value == 0.0
+        assert isinstance(if_cmd.body[2], MemStoreCommand)
+        assert if_cmd.body[2].value is a
 
-        self.assertIsInstance(job.commands[5], cQiMemStore)
-        self.assertEqual(job.commands[5].value.float_value, 24e-9)
+        assert isinstance(job.commands[5], MemStoreCommand)
+        assert job.commands[5].value.float_value == 24e-9
 
     def test_store_instruction_in_if_body(self):
         # TODO: We probably want to improve this by inserting
@@ -155,30 +159,30 @@ class RecordingOffsetInsertionTest(unittest.TestCase):
             cells = QiCells(2)
 
             a = QiTimeVariable(name="A", value=2.0)
-            b = QiVariable(name="B", value=4)
+            _b = QiVariable(name="B", value=4)
 
-            with If(a == 4) as i:
-                # cQiMemStore(cells[0], 8e-9)
+            with If(a == 4):
+                # MemStoreCommand(cells[0], 8e-9)
                 pass
             with Else():
-                # cQiMemStore(cells[0], 0.0)
+                # MemStoreCommand(cells[0], 0.0)
                 Recording(cells[0], 1, offset=0)
-                # cQiMemStore(cells[0], 8e-9)
+                # MemStoreCommand(cells[0], 8e-9)
 
             Recording(cells[0], 1, offset=8e-9)
 
-        insert_recording_offset_store_commands(job)
+        replace_variable_assignment_with_store_commands(job)
 
-        self.assertIsInstance(job.commands[4], If)
+        assert isinstance(job.commands[4], IfCommand)
         if_cmd = job.commands[4]
 
-        self.assertIsInstance(if_cmd.body[0], cQiMemStore)
-        self.assertEqual(if_cmd.body[0].value.float_value, 8e-9)
+        assert isinstance(if_cmd.body[0], MemStoreCommand)
+        assert if_cmd.body[0].value.float_value == 8e-9
 
-        self.assertIsInstance(if_cmd._else_body[0], cQiMemStore)
-        self.assertEqual(if_cmd._else_body[0].value.float_value, 0.0)
-        self.assertIsInstance(if_cmd._else_body[2], cQiMemStore)
-        self.assertEqual(if_cmd._else_body[2].value.float_value, 8e-9)
+        assert isinstance(if_cmd._else_body[0], MemStoreCommand)
+        assert if_cmd._else_body[0].value.float_value == 0.0
+        assert isinstance(if_cmd._else_body[2], MemStoreCommand)
+        assert if_cmd._else_body[2].value.float_value == 8e-9
 
     def test_store_instruction_in_else(self):
         # TODO: We probably want to improve this by inserting
@@ -190,17 +194,17 @@ class RecordingOffsetInsertionTest(unittest.TestCase):
             cells = QiCells(2)
 
             a = QiTimeVariable(name="A", value=2.0)
-            b = QiVariable(name="B", value=4)
+            _b = QiVariable(name="B", value=4)
 
             with If(a == 4) as i:
                 Recording(cells[0], 1, offset=0)
 
             Recording(cells[0], 1, offset=8e-9)
 
-        insert_recording_offset_store_commands(job)
-        self.assertIsInstance(i.body[0], cQiMemStore)
-        self.assertIsInstance(i.body[2], cQiMemStore)
-        self.assertIsInstance(i._else_body[0], cQiMemStore)
+        replace_variable_assignment_with_store_commands(job)
+        assert isinstance(i.body[0], MemStoreCommand)
+        assert isinstance(i.body[2], MemStoreCommand)
+        assert isinstance(i._else_body[0], MemStoreCommand)
 
     def test_insert_store_after_var_decl(self):
         with QiJob() as job:
@@ -211,86 +215,84 @@ class RecordingOffsetInsertionTest(unittest.TestCase):
             with ForRange(QiTimeVariable(), 0, 100e-9):
                 Recording(cells[0], 1, offset=a)
 
-        insert_recording_offset_store_commands(job)
+        replace_variable_assignment_with_store_commands(job)
         print(job)
 
         cmd = job.commands[1]
-        self.assertIsInstance(cmd, cQiMemStore)
-        self.assertEqual(cmd.value, a)
+        assert isinstance(cmd, MemStoreCommand)
+        assert cmd.value == a
 
     def test_initial_recording_offset(self):
         with QiJob() as job:
             cells = QiCells(2)
 
-            a = QiTimeVariable(name="A", value=2.0)
+            _a = QiTimeVariable(name="A", value=2.0)
 
             Recording(cells[0], 1, offset=4e-9)
 
-        insert_recording_offset_store_commands(job)
-        self.assertEqual(cells[0].initial_recording_offset, 4e-9)
-        self.assertEqual(len(job.commands), 3)
+        replace_variable_assignment_with_store_commands(job)
+        assert cells[0].initial_recording_offset == 4e-9
+        assert len(job.commands) == 3
 
     def test_move_before_loop(self):
         with QiJob() as job:
             cells = QiCells(1)
 
-            # cQiMemStore(20e-9)
+            # MemStoreCommand(20e-9)
 
             Recording(cells[0], 12e-9, 20e-9)
 
-            # cQiMemStore(40e-9)
+            # MemStoreCommand(40e-9)
 
             a = QiTimeVariable(name="A")
 
             with ForRange(a, 0, 100e-9):
                 Recording(cells[0], 12e-9, 40e-9)
 
-        insert_recording_offset_store_commands(job)
+        replace_variable_assignment_with_store_commands(job)
 
-        self.assertIsInstance(job.commands[0], cQiMemStore)
-        self.assertEqual(job.commands[0].value.float_value, 20e-9)
+        assert isinstance(job.commands[0], MemStoreCommand)
+        assert job.commands[0].value.float_value == 20e-9
 
-        self.assertIsInstance(job.commands[1], cQiRecording)
+        assert isinstance(job.commands[1], RecordingCommand)
 
-        self.assertIsInstance(job.commands[2], cQiMemStore)
-        self.assertEqual(job.commands[2].value.float_value, 40e-9)
+        assert isinstance(job.commands[2], MemStoreCommand)
+        assert job.commands[2].value.float_value == 40e-9
 
-        self.assertIsInstance(job.commands[3], cQiDeclare)
+        assert isinstance(job.commands[3], DeclareCommand)
 
     def test_invariant_expression_in_loop(self):
-
         with QiJob() as job:
             cells = QiCells(1)
 
             a = QiTimeVariable(name="A")
 
             b = QiTimeVariable(name="B")
-            # cQiMemStore(offset)
+            # MemStoreCommand(offset)
 
             with ForRange(a, 0, 100e-9):
                 offset = b + 1
                 Recording(cells[0], 12e-9, offset=offset)
 
-        insert_recording_offset_store_commands(job)
+        replace_variable_assignment_with_store_commands(job)
 
         print(job)
 
-        self.assertIsInstance(job.commands[2], cQiMemStore)
-        self.assertIs(job.commands[2].value, offset)
+        assert isinstance(job.commands[2], MemStoreCommand)
+        assert job.commands[2].value is offset
 
-        self.assertIsInstance(job.commands[3], ForRange)
-        self.assertIsInstance(job.commands[3].body[0], cQiRecording)
-        self.assertEqual(len(job.commands[3].body), 1)
+        assert isinstance(job.commands[3], ForRangeCommand)
+        assert isinstance(job.commands[3].body[0], RecordingCommand)
+        assert len(job.commands[3].body) == 1
 
     def test_not_invariant_expression_in_loop(self):
-
         with QiJob() as job:
             cells = QiCells(1)
 
             a = QiTimeVariable(name="A")
 
             b = QiTimeVariable(name="B")
-            # cQiMemStore(offset)
+            # MemStoreCommand(offset)
 
             with ForRange(a, 0, 100e-9):
                 offset = b + 1
@@ -298,20 +300,20 @@ class RecordingOffsetInsertionTest(unittest.TestCase):
 
                 with If(a == 20e-9):
                     Assign(b, 5)
-                    # cQiMemStore(offset)
+                    # MemStoreCommand(offset)
 
-        insert_recording_offset_store_commands(job)
+        replace_variable_assignment_with_store_commands(job)
 
         print(job)
 
-        self.assertIsInstance(job.commands[2], cQiMemStore)
-        self.assertIs(job.commands[2].value, offset)
+        assert isinstance(job.commands[2], MemStoreCommand)
+        assert job.commands[2].value is offset
 
-        self.assertIsInstance(job.commands[3], ForRange)
-        self.assertIsInstance(job.commands[3].body[0], cQiRecording)
-        self.assertIsInstance(job.commands[3].body[1], If)
-        self.assertIsInstance(job.commands[3].body[1].body[1], cQiMemStore)
-        self.assertIs(job.commands[3].body[1].body[1].value, offset)
+        assert isinstance(job.commands[3], ForRangeCommand)
+        assert isinstance(job.commands[3].body[0], RecordingCommand)
+        assert isinstance(job.commands[3].body[1], IfCommand)
+        assert isinstance(job.commands[3].body[1].body[1], MemStoreCommand)
+        assert job.commands[3].body[1].body[1].value is offset
 
     def test_multiple_cells(self):
         with QiJob() as job:
@@ -326,57 +328,57 @@ class RecordingOffsetInsertionTest(unittest.TestCase):
                 offset_cell_2 = b + 1
 
                 with If(a == 20e-9):
-                    # cQiMemStore(cell1, offset_cell_1)
+                    # MemStoreCommand(cell1, offset_cell_1)
                     Assign(b, 5)
-                    # cQiMemStore(cell2, offset_cell_2)
+                    # MemStoreCommand(cell2, offset_cell_2)
                     Recording(cells[1], 12e-9, offset=offset_cell_1)
                 # with Else():
-                #   cQiMemStore(cell2, offset_cell_2)
+                #   MemStoreCommand(cell2, offset_cell_2)
 
                 Recording(cells[2], 12e-9, offset=offset_cell_2)
                 Recording(cells[0], 12e-9, offset=20e-9)
 
-        insert_recording_offset_store_commands(job)
+        replace_variable_assignment_with_store_commands(job)
 
-        self.assertEqual(cells[0].initial_recording_offset, 20e-9)
+        assert cells[0].initial_recording_offset == 20e-9
 
-        self.assertIsInstance(job.commands[2], ForRange)
-        self.assertIsInstance(job.commands[2].body[0], If)
+        assert isinstance(job.commands[2], ForRangeCommand)
+        assert isinstance(job.commands[2].body[0], IfCommand)
 
         if_cmd = job.commands[2].body[0]
 
-        self.assertIsInstance(if_cmd.body[0], cQiMemStore)
-        self.assertEqual(if_cmd.body[0]._relevant_cells, set([cells[1]]))
-        self.assertIs(if_cmd.body[0].value, offset_cell_1)
+        assert isinstance(if_cmd.body[0], MemStoreCommand)
+        assert if_cmd.body[0]._relevant_cells == {cells[1]}
+        assert if_cmd.body[0].value is offset_cell_1
 
-        self.assertIsInstance(if_cmd.body[2], cQiMemStore)
-        self.assertEqual(if_cmd.body[2]._relevant_cells, set([cells[2]]))
-        self.assertIs(if_cmd.body[2].value, offset_cell_2)
+        assert isinstance(if_cmd.body[2], MemStoreCommand)
+        assert if_cmd.body[2]._relevant_cells == {cells[2]}
+        assert if_cmd.body[2].value is offset_cell_2
 
-        self.assertTrue(if_cmd.is_followed_by_else())
-        self.assertIsInstance(if_cmd._else_body[0], cQiMemStore)
-        self.assertIs(if_cmd._else_body[0].value, offset_cell_2)
-        self.assertEqual(if_cmd._else_body[0]._relevant_cells, set([cells[2]]))
+        assert if_cmd.is_followed_by_else()
+        assert isinstance(if_cmd._else_body[0], MemStoreCommand)
+        assert if_cmd._else_body[0].value is offset_cell_2
+        assert if_cmd._else_body[0]._relevant_cells == {cells[2]}
 
     def test_play_readout(self):
         with QiJob() as job:
             cells = QiCells(1)
-            # cQiMemStore(12e-9)
+            # MemStoreCommand(12e-9)
 
             Recording(cells[0], 20e-9, 12e-9)
 
-            # cQiMemStore(40e-9)
+            # MemStoreCommand(40e-9)
 
             PlayReadout(cells[0], QiPulse(40e-9))
             Recording(cells[0], 20e-9, 16e-9)
 
-        insert_recording_offset_store_commands(job)
+        replace_variable_assignment_with_store_commands(job)
 
-        self.assertIsInstance(job.commands[0], cQiMemStore)
-        self.assertEqual(job.commands[0].value.float_value, 12e-9)
+        assert isinstance(job.commands[0], MemStoreCommand)
+        assert job.commands[0].value.float_value == 12e-9
 
-        self.assertIsInstance(job.commands[2], cQiMemStore)
-        self.assertEqual(job.commands[2].value.float_value, 16e-9)
+        assert isinstance(job.commands[2], MemStoreCommand)
+        assert job.commands[2].value.float_value == 16e-9
 
     def test_different_offsets_in_parallel_blocks_not_allowed(self):
         with QiJob() as job:
@@ -388,55 +390,55 @@ class RecordingOffsetInsertionTest(unittest.TestCase):
                 Wait(cells[0], 20e-9)
                 Recording(cells[0], 12e-9, 8e-9)
 
-        with self.assertRaisesRegex(
+        with pytest.raises(
             RuntimeError,
-            "Parallel Blocks with multiple Recording instructions with different offsets are not supported.",
+            match="Parallel Blocks with multiple Recording instructions with different offsets are not supported.",
         ):
-            insert_recording_offset_store_commands(job)
+            replace_variable_assignment_with_store_commands(job)
 
     def test_parallel_blocks(self):
         with QiJob() as job:
             cells = QiCells(1)
 
-            # cQiMemStore(12e-9)
+            # MemStoreCommand(12e-9)
             Recording(cells[0], 12e-9, 12e-9)
 
-            # cQiMemStore(16e-9)
+            # MemStoreCommand(16e-9)
             with Parallel():
                 Recording(cells[0], 12e-9, 16e-9)
 
-        insert_recording_offset_store_commands(job)
+        replace_variable_assignment_with_store_commands(job)
 
-        self.assertIsInstance(job.commands[0], cQiMemStore)
-        self.assertEqual(job.commands[0].value.float_value, 12e-9)
+        assert isinstance(job.commands[0], MemStoreCommand)
+        assert job.commands[0].value.float_value == 12e-9
 
-        self.assertIsInstance(job.commands[2], cQiMemStore)
-        self.assertEqual(job.commands[2].value.float_value, 16e-9)
+        assert isinstance(job.commands[2], MemStoreCommand)
+        assert job.commands[2].value.float_value == 16e-9
 
     def test_multiple_recording_in_sequence(self):
         with QiJob() as job:
             cells = QiCells(1)
 
-            # cQiMemStore(cells[0], 8e-9)
+            # MemStoreCommand(cells[0], 8e-9)
             Recording(cells[0], 8e-9, 8e-9)
             Recording(cells[0], 8e-9, 8e-9)
 
-            # cQiMemStore(cells[0], 12e-9)
+            # MemStoreCommand(cells[0], 12e-9)
             Recording(cells[0], 8e-9, 12e-9)
 
-            # cQiMemStore(cells[0], 16e-9)
+            # MemStoreCommand(cells[0], 16e-9)
             Recording(cells[0], 8e-9, 16e-9)
 
-        insert_recording_offset_store_commands(job)
+        replace_variable_assignment_with_store_commands(job)
 
-        self.assertIsInstance(job.commands[0], cQiMemStore)
-        self.assertEqual(job.commands[0].value.float_value, 8e-9)
+        assert isinstance(job.commands[0], MemStoreCommand)
+        assert job.commands[0].value.float_value == 8e-9
 
-        self.assertIsInstance(job.commands[3], cQiMemStore)
-        self.assertEqual(job.commands[3].value.float_value, 12e-9)
+        assert isinstance(job.commands[3], MemStoreCommand)
+        assert job.commands[3].value.float_value == 12e-9
 
-        self.assertIsInstance(job.commands[5], cQiMemStore)
-        self.assertEqual(job.commands[5].value.float_value, 16e-9)
+        assert isinstance(job.commands[5], MemStoreCommand)
+        assert job.commands[5].value.float_value == 16e-9
 
     def test_nested_loops(self):
         with QiJob() as job:
@@ -445,115 +447,115 @@ class RecordingOffsetInsertionTest(unittest.TestCase):
             a = QiTimeVariable(name="A")
 
             with ForRange(a, 0, 100e-9):
-                # cQiMemStore
+                # MemStoreCommand
                 with ForRange(QiVariable(), 0, 100):
                     with ForRange(QiVariable(), 0, 100):
                         Recording(cells[0], 8e-9, a)
 
-        insert_recording_offset_store_commands(job)
+        replace_variable_assignment_with_store_commands(job)
 
-        self.assertIsInstance(job.commands[1].body[0], cQiMemStore)
-        self.assertIs(job.commands[1].body[0].value, a)
+        assert isinstance(job.commands[1].body[0], MemStoreCommand)
+        assert job.commands[1].body[0].value is a
 
     def test_qi_cell_property_recording_offset(self):
         with QiJob() as job:
             cells = QiCells(1)
 
-            cell_prop_1 = cells[0]["first_rec_offset"]
+            _cell_prop_1 = cells[0]["first_rec_offset"]
             cell_prop_2 = cells[0]["second_rec_offset"]
             cell_prop_3 = cells[0]["third_rec_offset"]
 
-            # cQiMemStore(cells[0], cells[0]["second_rec_offset"])
+            # MemStoreCommand(cells[0], cells[0]["second_rec_offset"])
 
             with ForRange(QiTimeVariable(), 0, 100e-9):
                 Recording(cells[0], 20e-9, cell_prop_2)
 
-            # cQiMemStore(cells[0], cells[0]["third_rec_offset"]) // the factor of two is folded into the QiCellProperty
+            # MemStoreCommand(cells[0], cells[0]["third_rec_offset"]) // the factor of two is folded into the QiCellProperty
 
             Recording(cells[0], 20e-9, cell_prop_3 * 2)
 
-        insert_recording_offset_store_commands(job)
+        replace_variable_assignment_with_store_commands(job)
 
         print(job)
 
-        self.assertIsInstance(job.commands[0], cQiMemStore)
-        self.assertIs(job.commands[0].value, cell_prop_2)
+        assert isinstance(job.commands[0], MemStoreCommand)
+        assert job.commands[0].value is cell_prop_2
 
-        self.assertIsInstance(job.commands[3], cQiMemStore)
-        self.assertIs(job.commands[3].value, cell_prop_3)
+        assert isinstance(job.commands[3], MemStoreCommand)
+        assert job.commands[3].value is cell_prop_3
 
 
-class PlayFrequencyTest(unittest.TestCase):
+class TestPlayFrequency:
     def test_simple_play(self):
         with QiJob() as job:
             cells = QiCells(1)
 
-            # cQiMemStore
+            # MemStoreCommand
             Play(cells[0], QiPulse(20e-9, frequency=10))
-            # cQiMemStore
+            # MemStoreCommand
             Play(cells[0], QiPulse(20e-9, frequency=20))
 
-        insert_manipulation_pulse_frequency_store_commands(job)
+        replace_variable_assignment_with_store_commands(job)
 
-        self.assertIsInstance(job.commands[0], cQiMemStore)
-        self.assertEqual(job.commands[0].addr, MANIPULATION_PULSE_FREQUENCY_ADDRESS)
-        self.assertEqual(job.commands[0].value, 10)
+        assert isinstance(job.commands[0], MemStoreCommand)
+        assert job.commands[0].addr == MANIPULATION_PULSE_FREQUENCY_ADDRESS
+        assert job.commands[0].value == 10
 
-        self.assertIsInstance(job.commands[1], cQiPlay)
+        assert isinstance(job.commands[1], PlayCommand)
 
-        self.assertIsInstance(job.commands[2], cQiMemStore)
-        self.assertEqual(job.commands[2].addr, MANIPULATION_PULSE_FREQUENCY_ADDRESS)
-        self.assertEqual(job.commands[2].value, 10)
+        assert isinstance(job.commands[2], MemStoreCommand)
+        assert job.commands[2].addr == MANIPULATION_PULSE_FREQUENCY_ADDRESS
+        assert job.commands[2].value == 10
 
-        self.assertIsInstance(job.commands[3], cQiPlay)
+        assert isinstance(job.commands[3], PlayCommand)
 
     def test_keep_frequency(self):
         with QiJob() as job:
             cells = QiCells(1)
 
-            # cQiMemStore
+            # MemStoreCommand
             Play(cells[0], QiPulse(20e-9, frequency=10))
 
             Play(cells[0], QiPulse(20e-9))
-            # cQiMemStore
+            # MemStoreCommand
             Play(cells[0], QiPulse(20e-9, frequency=20))
 
-            insert_manipulation_pulse_frequency_store_commands(job)
+            replace_variable_assignment_with_store_commands(job)
 
-            self.assertIsInstance(job.commands[0], cQiMemStore)
-            self.assertEqual(job.commands[0].value, 10)
+            assert isinstance(job.commands[0], MemStoreCommand)
+            assert job.commands[0].value == 10
 
-            self.assertIsInstance(job.commands[1], cQiPlay)
+            assert isinstance(job.commands[1], PlayCommand)
 
-            self.assertIsInstance(job.commands[2], cQiPlay)
+            assert isinstance(job.commands[2], PlayCommand)
 
-            self.assertIsInstance(job.commands[3], cQiMemStore)
-            self.assertEqual(job.commands[3].value, 10)
+            assert isinstance(job.commands[3], MemStoreCommand)
+            assert job.commands[3].value == 10
 
-            self.assertIsInstance(job.commands[4], cQiPlay)
+            assert isinstance(job.commands[4], PlayCommand)
 
     def test_readout_frequency(self):
         with QiJob() as job:
             cells = QiCells(1)
 
-            # cQiMemStore
+            # MemStoreCommand
             PlayReadout(cells[0], QiPulse(20e-9, frequency=10))
-            # cQiMemStore
+            # MemStoreCommand
             PlayReadout(cells[0], QiPulse(20e-9, frequency=20))
 
-        insert_readout_pulse_frequency_store_commands(job)
+        replace_variable_assignment_with_store_commands(job)
 
-        self.assertIsInstance(job.commands[0], cQiMemStore)
-        self.assertEqual(job.commands[0].addr, READOUT_PULSE_FREQUENCY_ADDRESS)
-        self.assertEqual(job.commands[0].value, 10)
+        assert isinstance(job.commands[0], MemStoreCommand)
+        assert job.commands[0].addr == READOUT_PULSE_FREQUENCY_ADDRESS
+        assert job.commands[0].value == 10
 
-        self.assertIsInstance(job.commands[1], cQiPlayReadout)
+        assert isinstance(job.commands[1], PlayReadoutCommand)
 
-        self.assertIsInstance(job.commands[2], cQiMemStore)
-        self.assertEqual(job.commands[2].addr, READOUT_PULSE_FREQUENCY_ADDRESS)
-        self.assertEqual(job.commands[2].value, 10)
+        assert isinstance(job.commands[2], MemStoreCommand)
+        assert job.commands[2].addr == READOUT_PULSE_FREQUENCY_ADDRESS
+        assert job.commands[2].value == 10
 
-        self.assertIsInstance(job.commands[3], cQiPlayReadout)
+        assert isinstance(job.commands[3], PlayReadoutCommand)
 
     def test_initial_manip_frequency(self):
         with QiJob() as job:
@@ -561,9 +563,9 @@ class PlayFrequencyTest(unittest.TestCase):
 
             Play(cells[0], QiPulse(20e-9, frequency=10))
 
-        insert_manipulation_pulse_frequency_store_commands(job)
+        replace_variable_assignment_with_store_commands(job)
 
-        self.assertEqual(cells[0].initial_manipulation_frequency, 10)
+        assert cells[0].initial_manipulation_frequency == 10
 
     def test_initial_readout_frequency(self):
         with QiJob() as job:
@@ -571,30 +573,30 @@ class PlayFrequencyTest(unittest.TestCase):
 
             PlayReadout(cells[0], QiPulse(20e-9, frequency=10))
 
-        insert_readout_pulse_frequency_store_commands(job)
+        replace_variable_assignment_with_store_commands(job)
 
-        self.assertEqual(cells[0].initial_readout_frequency, 10)
+        assert cells[0].initial_readout_frequency == 10
 
     def test_manip_and_readout_frequencies_combined(self):
         with QiJob() as job:
             cells = QiCells(1)
 
-            # cQiMemStore for PlayReadout
-            # cQiMemStore for Play
+            # MemStoreCommand for PlayReadout
+            # MemStoreCommand for Play
 
             Play(cells[0], QiPulse(20e-9, frequency=10))
 
-            # cQiMemStore for Play
+            # MemStoreCommand for Play
 
             PlayReadout(cells[0], QiPulse(20e-9, frequency=10))
 
             Play(cells[0], QiPulse(20e-9, frequency=20))
 
-            # cQiMemStore for Play
+            # MemStoreCommand for Play
 
             PlayReadout(cells[0], QiPulse(20e-9, frequency=10))
 
-            # cQiMemStore for PlayReadout
+            # MemStoreCommand for PlayReadout
 
             Play(cells[0], QiPulse(20e-9, frequency=30))
 
@@ -602,37 +604,37 @@ class PlayFrequencyTest(unittest.TestCase):
 
         job._build_program()
 
-        self.assertIsInstance(job.commands[0], cQiMemStore)
-        self.assertEqual(job.commands[0].value, 10)
-        self.assertEqual(job.commands[0].addr, READOUT_PULSE_FREQUENCY_ADDRESS)
+        assert isinstance(job.commands[0], MemStoreCommand)
+        assert job.commands[0].value == 10
+        assert job.commands[0].addr == READOUT_PULSE_FREQUENCY_ADDRESS
 
-        self.assertIsInstance(job.commands[1], cQiMemStore)
-        self.assertEqual(job.commands[1].value, 10)
-        self.assertEqual(job.commands[1].addr, MANIPULATION_PULSE_FREQUENCY_ADDRESS)
+        assert isinstance(job.commands[1], MemStoreCommand)
+        assert job.commands[1].value == 10
+        assert job.commands[1].addr == MANIPULATION_PULSE_FREQUENCY_ADDRESS
 
-        self.assertIsInstance(job.commands[2], cQiPlay)
+        assert isinstance(job.commands[2], PlayCommand)
 
-        self.assertIsInstance(job.commands[3], cQiMemStore)
-        self.assertEqual(job.commands[3].value, 20)
-        self.assertEqual(job.commands[3].addr, MANIPULATION_PULSE_FREQUENCY_ADDRESS)
+        assert isinstance(job.commands[3], MemStoreCommand)
+        assert job.commands[3].value == 20
+        assert job.commands[3].addr == MANIPULATION_PULSE_FREQUENCY_ADDRESS
 
-        self.assertIsInstance(job.commands[4], cQiPlayReadout)
+        assert isinstance(job.commands[4], PlayReadoutCommand)
 
-        self.assertIsInstance(job.commands[5], cQiPlay)
+        assert isinstance(job.commands[5], PlayCommand)
 
-        self.assertIsInstance(job.commands[6], cQiMemStore)
-        self.assertEqual(job.commands[6].value, 60)
-        self.assertEqual(job.commands[6].addr, MANIPULATION_PULSE_FREQUENCY_ADDRESS)
+        assert isinstance(job.commands[6], MemStoreCommand)
+        assert job.commands[6].value == 60
+        assert job.commands[6].addr == MANIPULATION_PULSE_FREQUENCY_ADDRESS
 
-        self.assertIsInstance(job.commands[7], cQiPlayReadout)
+        assert isinstance(job.commands[7], PlayReadoutCommand)
 
-        self.assertIsInstance(job.commands[8], cQiMemStore)
-        self.assertEqual(job.commands[8].value, 20)
-        self.assertEqual(job.commands[8].addr, READOUT_PULSE_FREQUENCY_ADDRESS)
+        assert isinstance(job.commands[8], MemStoreCommand)
+        assert job.commands[8].value == 20
+        assert job.commands[8].addr == READOUT_PULSE_FREQUENCY_ADDRESS
 
-        self.assertIsInstance(job.commands[9], cQiPlay)
+        assert isinstance(job.commands[9], PlayCommand)
 
-        self.assertIsInstance(job.commands[10], cQiPlayReadout)
+        assert isinstance(job.commands[10], PlayReadoutCommand)
 
     def test_variable_manipulation_frequency(self):
         with QiJob() as job:
@@ -645,70 +647,68 @@ class PlayFrequencyTest(unittest.TestCase):
 
         job._build_program()
 
-        self.assertIsInstance(job.commands[1], ForRange)
-        self.assertIsInstance(job.commands[1].body[0], cQiMemStore)
-        self.assertEqual(
-            job.commands[1].body[0].addr, MANIPULATION_PULSE_FREQUENCY_ADDRESS
-        )
-        self.assertIs(job.commands[1].body[0].value, x)
+        assert isinstance(job.commands[1], ForRangeCommand)
+        assert isinstance(job.commands[1].body[0], MemStoreCommand)
+        assert job.commands[1].body[0].addr == MANIPULATION_PULSE_FREQUENCY_ADDRESS
+        assert job.commands[1].body[0].value is x
 
-        self.assertIsInstance(job.commands[1].body[1], cQiPlay)
+        assert isinstance(job.commands[1].body[1], PlayCommand)
 
     def test_command_with_no_manipulation_frequency(self):
         with QiJob() as job:
             cells = QiCells(1)
 
-            # cQiMemStore
+            # MemStoreCommand
             Play(cells[0], QiPulse(20e-9, frequency=12e3))
             Play(cells[0], QiPulse(20e-9))  # inherits frequency from prev command.
 
-            # cQiMemStore
+            # MemStoreCommand
             Play(cells[0], QiPulse(20e-9, frequency=24e3))
 
         job._build_program()
 
-        self.assertIsInstance(job.commands[0], cQiMemStore)
-        self.assertEqual(job.commands[0].value.float_value, 12e3)
-        self.assertEqual(job.commands[0].addr, MANIPULATION_PULSE_FREQUENCY_ADDRESS)
+        assert isinstance(job.commands[0], MemStoreCommand)
+        assert job.commands[0].value.float_value == 12e3
+        assert job.commands[0].addr == MANIPULATION_PULSE_FREQUENCY_ADDRESS
 
-        self.assertIsInstance(job.commands[1], cQiPlay)
+        assert isinstance(job.commands[1], PlayCommand)
 
-        self.assertIsInstance(job.commands[2], cQiPlay)
+        assert isinstance(job.commands[2], PlayCommand)
 
-        self.assertIsInstance(job.commands[3], cQiMemStore)
-        self.assertEqual(job.commands[3].value.float_value, 24e3)
-        self.assertEqual(job.commands[3].addr, MANIPULATION_PULSE_FREQUENCY_ADDRESS)
+        assert isinstance(job.commands[3], MemStoreCommand)
+        assert job.commands[3].value.float_value == 24e3
+        assert job.commands[3].addr == MANIPULATION_PULSE_FREQUENCY_ADDRESS
 
-        self.assertIsInstance(job.commands[4], cQiPlay)
+        assert isinstance(job.commands[4], PlayCommand)
 
     def test_command_with_no_readout_frequency(self):
         with QiJob() as job:
             cells = QiCells(1)
 
-            # cQiMemStore
+            # MemStoreCommand
             PlayReadout(cells[0], QiPulse(20e-9, frequency=12e3))
             PlayReadout(
                 cells[0], QiPulse(20e-9)
             )  # inherits frequency from prev command.
 
-            # cQiMemStore
+            # MemStoreCommand
             PlayReadout(cells[0], QiPulse(20e-9, frequency=24e3))
 
         job._build_program()
 
-        self.assertIsInstance(job.commands[0], cQiMemStore)
-        self.assertEqual(job.commands[0].value.float_value, 12e3)
-        self.assertEqual(job.commands[0].addr, READOUT_PULSE_FREQUENCY_ADDRESS)
+        assert isinstance(job.commands[0], MemStoreCommand)
+        assert job.commands[0].value.float_value == 12e3
+        assert job.commands[0].addr == READOUT_PULSE_FREQUENCY_ADDRESS
 
-        self.assertIsInstance(job.commands[1], cQiPlayReadout)
+        assert isinstance(job.commands[1], PlayReadoutCommand)
 
-        self.assertIsInstance(job.commands[2], cQiPlayReadout)
+        assert isinstance(job.commands[2], PlayReadoutCommand)
 
-        self.assertIsInstance(job.commands[3], cQiMemStore)
-        self.assertEqual(job.commands[3].value.float_value, 24e3)
-        self.assertEqual(job.commands[3].addr, READOUT_PULSE_FREQUENCY_ADDRESS)
+        assert isinstance(job.commands[3], MemStoreCommand)
+        assert job.commands[3].value.float_value == 24e3
+        assert job.commands[3].addr == READOUT_PULSE_FREQUENCY_ADDRESS
 
-        self.assertIsInstance(job.commands[4], cQiPlayReadout)
+        assert isinstance(job.commands[4], PlayReadoutCommand)
 
     def test_integer_pseudo_vna(self):
         with QiJob() as pseudo_vna:
@@ -721,12 +721,12 @@ class PlayFrequencyTest(unittest.TestCase):
 
         pseudo_vna._build_program()
 
-        self.assertIsInstance(pseudo_vna.commands[1], ForRange)
+        assert isinstance(pseudo_vna.commands[1], ForRangeCommand)
 
-        self.assertIsInstance(pseudo_vna.commands[1].body[0], cQiMemStore)
-        self.assertEqual(pseudo_vna.commands[1].body[0].value, fr)
+        assert isinstance(pseudo_vna.commands[1].body[0], MemStoreCommand)
+        assert pseudo_vna.commands[1].body[0].value == fr
 
-        self.assertTrue(len(pseudo_vna.cell_seq_dict[q[0]].instruction_list) > 20)
+        assert len(pseudo_vna.cell_seq_dict[q[0]].instruction_list) > 20
 
     def test_float_pseudo_vna(self):
         with QiJob() as pseudo_vna:
@@ -739,12 +739,12 @@ class PlayFrequencyTest(unittest.TestCase):
 
         pseudo_vna._build_program()
 
-        self.assertIsInstance(pseudo_vna.commands[1], ForRange)
+        assert isinstance(pseudo_vna.commands[1], ForRangeCommand)
 
-        self.assertIsInstance(pseudo_vna.commands[1].body[0], cQiMemStore)
-        self.assertEqual(pseudo_vna.commands[1].body[0].value, fr)
+        assert isinstance(pseudo_vna.commands[1].body[0], MemStoreCommand)
+        assert pseudo_vna.commands[1].body[0].value == fr
 
-        self.assertTrue(len(pseudo_vna.cell_seq_dict[q[0]].instruction_list) > 20)
+        assert len(pseudo_vna.cell_seq_dict[q[0]].instruction_list) > 20
 
     def test_preserve_frequency(self):
         # This tests ensures that programs with empty Memory Parameters (like the second Play command here)
@@ -756,5 +756,135 @@ class PlayFrequencyTest(unittest.TestCase):
             Play(q[0], QiPulse(200e-9))
 
         job._build_program()
-        self.assertIsInstance(job.commands[0], cQiPlay)
-        self.assertIsInstance(job.commands[1], cQiPlay)
+        assert isinstance(job.commands[0], PlayCommand)
+        assert isinstance(job.commands[1], PlayCommand)
+
+    def test_variable_manipulation_amplitude(self):
+        with QiJob() as job:
+            q = QiCells(1)
+            a = QiAmplitudeVariable()
+            with ForRange(a, 0.0, 1.0, 0.1):
+                Play(q[0], QiPulse(length=100e-9, amplitude=a))
+        assert job.get_assembly() == [
+            "tr 0x0, 0x0, 0x0, 0x0, 0x0, 0x0",
+            # Initialize r2 to int16 max
+            "lui r2, 32768",
+            "addi r2, r2, 0xfff",
+            # Intialize r1 to 0
+            "addi r1, r0, 0x0",
+            # Main loop: branch if greater or equal
+            "bge r1, r2, 0xc",
+            # r3 := shift r1 left by 16
+            "sll r3, r1, 0x10",
+            # r4 := r1 | r3
+            "or r4, r1, r3",
+            # Load address
+            "lui r3, 24576",
+            "addi r3, r3, 0x4",
+            # Store r4 @ r3
+            "sw r4, 0(r3)",
+            # trigger + wait (play pulse)
+            "tr 0x0, 0x0, 0x1, 0x0, 0x0, 0x0",
+            "wti 0x18",
+            # Increase r1 by r3
+            "lui r3, 4096",
+            "addi r3, r3, 0xccc",
+            "add r1, r1, r3",
+            "j -0xb",
+            "end",
+        ]
+
+    def test_variable_readout_amplitude(self):
+        with QiJob() as job:
+            q = QiCells(1)
+            a = QiAmplitudeVariable()
+            with ForRange(a, 0.0, 1.0, 0.1):
+                PlayReadout(q[0], QiPulse(length=100e-9, amplitude=a))
+        assert job.get_assembly() == [
+            "tr 0x0, 0x0, 0x0, 0x0, 0x0, 0x0",
+            # Initialize r2 to int16 max
+            "lui r2, 32768",
+            "addi r2, r2, 0xfff",
+            # Intialize r1 to 0
+            "addi r1, r0, 0x0",
+            # Main loop: branch if greater or equal
+            "bge r1, r2, 0xc",
+            # r3 := shift r1 left by 16
+            "sll r3, r1, 0x10",
+            # r4 := r1 | r3
+            "or r4, r1, r3",
+            # Load address
+            "lui r3, 57344",
+            "addi r3, r3, 0x4",
+            # Store r4 @ r3
+            "sw r4, 0(r3)",
+            # trigger + wait (play pulse)
+            "tr 0x1, 0x0, 0x0, 0x0, 0x0, 0x0",
+            "wti 0x18",
+            # Increase r1 by r3
+            "lui r3, 4096",
+            "addi r3, r3, 0xccc",
+            "add r1, r1, r3",
+            "j -0xb",
+            "end",
+        ]
+
+    def test_variable_manipulation_phase(self):
+        with QiJob() as job:
+            q = QiCells(1)
+            p = QiPhaseVariable()
+            with ForRange(p, 0.0, 6, 1):
+                Play(q[0], QiPulse(length=100e-9, phase=p))
+        assert job.get_assembly() == [
+            "tr 0x0, 0x0, 0x0, 0x0, 0x0, 0x0",
+            # Initialize r2 to int16 max
+            "lui r2, 61440",
+            "addi r2, r2, 0x476",
+            # Intialize r1 to 0
+            "addi r1, r0, 0x0",
+            # Main loop: branch if greater or equal
+            "bge r1, r2, 0xa",
+            # Load address
+            "lui r3, 24576",
+            "addi r3, r3, 0xc",
+            # Store r4 @ r3
+            "sw r1, 0(r3)",
+            # trigger + wait (play pulse)
+            "tr 0x0, 0x0, 0x1, 0x0, 0x0, 0x0",
+            "wti 0x18",
+            "lui r3, 12288",
+            "addi r3, r3, 0x8be",
+            "add r1, r1, r3",
+            "j -0x9",
+            "end",
+        ]
+
+    def test_variable_readout_phase(self):
+        with QiJob() as job:
+            q = QiCells(1)
+            p = QiPhaseVariable()
+            with ForRange(p, 0.0, 6, 1):
+                PlayReadout(q[0], QiPulse(length=100e-9, phase=p))
+        assert job.get_assembly() == [
+            "tr 0x0, 0x0, 0x0, 0x0, 0x0, 0x0",
+            # Initialize r2 to int16 max
+            "lui r2, 61440",
+            "addi r2, r2, 0x476",
+            # Intialize r1 to 0
+            "addi r1, r0, 0x0",
+            # Main loop: branch if greater or equal
+            "bge r1, r2, 0xa",
+            # Load address
+            "lui r3, 57344",
+            "addi r3, r3, 0xc",
+            # Store r4 @ r3
+            "sw r1, 0(r3)",
+            # trigger + wait (play pulse)
+            "tr 0x1, 0x0, 0x0, 0x0, 0x0, 0x0",
+            "wti 0x18",
+            "lui r3, 12288",
+            "addi r3, r3, 0x8be",
+            "add r1, r1, r3",
+            "j -0x9",
+            "end",
+        ]

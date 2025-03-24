@@ -14,12 +14,14 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """Module to analyze I/Q plane measurements."""
-from typing import Tuple, Optional
-import numpy as np
-import scipy.optimize as opt
-from scipy.special import erf
+
+from __future__ import annotations
 
 import matplotlib.pyplot as plt
+import numpy as np
+import numpy.typing as npt
+import scipy.optimize as opt
+from scipy.special import erf
 
 
 def gaussian_2d(position, amplitude, x0, y0, sigma_x, sigma_y, theta):
@@ -28,9 +30,7 @@ def gaussian_2d(position, amplitude, x0, y0, sigma_x, sigma_y, theta):
     a = (np.cos(theta) ** 2) / (2 * sigma_x**2) + (np.sin(theta) ** 2) / (
         2 * sigma_y**2
     )
-    b = -(np.sin(2 * theta)) / (4 * sigma_x**2) + (np.sin(2 * theta)) / (
-        4 * sigma_y**2
-    )
+    b = -(np.sin(2 * theta)) / (4 * sigma_x**2) + (np.sin(2 * theta)) / (4 * sigma_y**2)
     c = (np.sin(theta) ** 2) / (2 * sigma_x**2) + (np.cos(theta) ** 2) / (
         2 * sigma_y**2
     )
@@ -123,10 +123,10 @@ class IQFit:
     def get_blobs(
         self,
         order=4,
-        histo: Optional[np.ndarray] = None,
+        histo: npt.NDArray | None = None,
         crop_for_fit: bool = True,
         plot=True,
-    ) -> Tuple:
+    ) -> tuple:
         """
         Returns the blob data from the given histogram.
 
@@ -267,7 +267,7 @@ class IQFit:
     @staticmethod
     def _fit_blob(
         histo: np.ndarray, pstart: tuple, xy_meshgrid: np.ndarray
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
         Fit a 2D gaussian function to a blob of IQ data.
         The following parameters are optimized:

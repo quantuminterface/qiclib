@@ -25,23 +25,23 @@ The abstract domain is modeled using DataflowValue. Its merge function represent
 It is recommended to treat DataflowValues as immutable.
 """
 
+from __future__ import annotations
+
 from abc import abstractmethod
-from enum import Enum
-from typing import Optional, List, Set, Tuple, Union, Dict
 from copy import copy
+from dataclasses import dataclass, field, replace
+from enum import Enum
+from itertools import count
 
 from qiclib.code.qi_var_definitions import (
-    _QiVariableBase,
     QiExpression,
+    _QiVariableBase,
 )
 
+from .qi_command import ForRangeCommand, IfCommand, ParallelCommand
 from .qi_jobs import (
-    ForRange,
-    If,
-    Parallel,
     QiCell,
     QiCommand,
-    QiContextManager,
     QiJob,
 )
 
@@ -84,35 +84,30 @@ class _CFGNode:
                 _CFGNode.DestEdgeType.NORMAL: "normal",
             }[self]
 
+    @dataclass(unsafe_hash=True)
     class Neighbor:
         """Combination of node and both edge types. Each edge in the CFG is represented by an instance of this class"""
 
-        def __init__(
-            self,
-            neighbor: "_CFGNode",
-            src_edge_type: "_CFGNode.SrcEdgeType",
-            dest_edge_type: Optional["_CFGNode.DestEdgeType"] = None,
-        ):
-            # Default argument didn't work for me in this case.
-            if dest_edge_type is None:
-                dest_edge_type = _CFGNode.DestEdgeType.NORMAL
+        node: _CFGNode
+        src_edge_type: _CFGNode.SrcEdgeType
+        """
+        Information about the edge for the src node for example, if this edge goes to the 'else' block of an 'if' statement.)
+        """
+        dest_edge_type: _CFGNode.DestEdgeType = field(
+            default_factory=lambda: _CFGNode.DestEdgeType.NORMAL
+        )
+        """
+        Information about the edge for the destination node (for example, if the edge loops back from the body of a for statement.)
+        """
 
-            self.node = neighbor
-            # Information about the edge for the src node
-            # (for example, if this edge goes to the 'else' block of an 'if' statement.)
-            self.src_edge_type = src_edge_type
-            # Information about the edge for the destination node
-            # (for example, if the edge loops back from the body of a for statement.)
-            self.dest_edge_type = dest_edge_type
-
-    _cfg_node_next_id = 1
+    _cfg_node_id = count()
 
     def __init__(
         self,
-        type: Union["_CFGNode.Type", QiCommand],
+        type: _CFGNode.Type | QiCommand,
         instruction_list,
         index,
-        *predecessors: "Tuple[_CFGNode, _CFGNode.SrcEdgeType]",
+        *predecessors: tuple[_CFGNode, _CFGNode.SrcEdgeType],
     ):
         if isinstance(type, QiCommand):
             self.type = _CFGNode.Type.COMMAND
@@ -124,41 +119,38 @@ class _CFGNode:
         # This field is used to associated arbitrary data with every node.
         # For example, a dataflow analysis might use this dictionary to
         # the nodes current abstract value.
-        self.value_map: Dict[str, CellValues] = {}
+        self.value_map: dict[str, CellValues] = {}
 
-        self.predecessors: Set[_CFGNode.Neighbor] = set()
-        self.successors: Set[_CFGNode.Neighbor] = set()
+        self.predecessors: set[_CFGNode.Neighbor] = set()
+        self.successors: set[_CFGNode.Neighbor] = set()
 
         # Used to find commands in job command list, so we can insert new instruction before or after this
         # command.
         self.instruction_list = instruction_list
         self.instruction_index = index
 
-        self.id = _CFGNode._cfg_node_next_id
-        _CFGNode._cfg_node_next_id += 1
+        self.id = next(_CFGNode._cfg_node_id)
 
         self.connect_predecessors(*predecessors)
 
-    def connect_successors(self, *successors: "_CFGNode.Neighbor"):
-        assert all(map(lambda x: isinstance(x, _CFGNode.Neighbor), successors))
+    def connect_successors(self, *successors: _CFGNode.Neighbor):
+        assert all(isinstance(x, _CFGNode.Neighbor) for x in successors)
 
         for succ_neighbor in successors:
             succ = succ_neighbor.node
 
-            pred_neighbor = copy(succ_neighbor)
-            pred_neighbor.node = self
+            pred_neighbor = replace(succ_neighbor, node=self)
 
             self.successors.add(succ_neighbor)
             succ.predecessors.add(pred_neighbor)
 
-    def connect_predecessors(self, *predecessors: "_CFGNode.Neighbor"):
-        assert all(map(lambda x: isinstance(x, _CFGNode.Neighbor), predecessors))
+    def connect_predecessors(self, *predecessors: _CFGNode.Neighbor):
+        assert all(isinstance(x, _CFGNode.Neighbor) for x in predecessors)
 
         for pred_neighbor in predecessors:
             pred = pred_neighbor.node
 
-            succ_neighbor = copy(pred_neighbor)
-            succ_neighbor.node = self
+            succ_neighbor = replace(pred_neighbor, node=self)
 
             self.predecessors.add(pred_neighbor)
             pred.successors.add(succ_neighbor)
@@ -170,7 +162,7 @@ class _CFG:
     """
 
     def __init__(self, job: QiJob):
-        self.nodes: Set[_CFGNode] = set()
+        self.nodes: set[_CFGNode] = set()
 
         start, end = recursive_build_sub_cfg(job.commands, self.nodes)
 
@@ -264,8 +256,8 @@ class _CFG:
 
 
 def recursive_build_sub_cfg(
-    commands: List[QiCommand], nodes
-) -> Tuple[_CFGNode, List[_CFGNode.Neighbor]]:
+    commands: list[QiCommand], nodes
+) -> tuple[_CFGNode, list[_CFGNode.Neighbor]]:
     """
     Constructs the nodes and edges for a CFG containing provided commands.
     `nodes` accumulates all nodes of the CFG.
@@ -273,10 +265,10 @@ def recursive_build_sub_cfg(
 
     assert len(commands) > 0
 
-    prev: List[_CFGNode.Neighbor] = []
+    prev: list[_CFGNode.Neighbor] = []
 
-    for idx, command in enumerate(commands, 0):
-        if isinstance(command, If):
+    for idx, command in enumerate(commands):
+        if isinstance(command, IfCommand):
             node = _CFGNode(command, commands, idx, *prev)
             nodes.add(node)
 
@@ -300,7 +292,7 @@ def recursive_build_sub_cfg(
             else:
                 prev.append(_CFGNode.Neighbor(node, _CFGNode.SrcEdgeType.IF_FALSE))
 
-        elif isinstance(command, ForRange):
+        elif isinstance(command, ForRangeCommand):
             for p in prev:
                 p.dest_edge_type = _CFGNode.DestEdgeType.FOR_ENTRY
 
@@ -312,7 +304,7 @@ def recursive_build_sub_cfg(
 
                 dest_edge_type = (
                     _CFGNode.DestEdgeType.FOR_ENTRY
-                    if isinstance(body_start.command, ForRange)
+                    if isinstance(body_start.command, ForRangeCommand)
                     else None
                 )
 
@@ -337,7 +329,7 @@ def recursive_build_sub_cfg(
 
             prev = [_CFGNode.Neighbor(node, _CFGNode.SrcEdgeType.FOR_END)]
 
-        elif isinstance(command, Parallel):
+        elif isinstance(command, ParallelCommand):
             # Parallel Blocks have somewhat tricky semantics and don't fit neatly into a CFG schema.
             # Therefore we just treat them as a single command and the respective analyses can deal with them
             # as they see fit.
@@ -345,9 +337,6 @@ def recursive_build_sub_cfg(
             nodes.add(node)
             prev = [_CFGNode.Neighbor(node, _CFGNode.SrcEdgeType.NORMAL)]
         else:
-            assert not isinstance(
-                command, QiContextManager
-            ), "Context manager should probably be handled separately."
             node = _CFGNode(command, commands, idx, *prev)
             nodes.add(node)
             prev = [_CFGNode.Neighbor(node, _CFGNode.SrcEdgeType.NORMAL)]
@@ -367,7 +356,7 @@ class DataflowValue:
     """
 
     @abstractmethod
-    def merge(self, other: "DataflowValue") -> "DataflowValue":
+    def merge(self, other: DataflowValue) -> DataflowValue:
         raise NotImplementedError(
             f"{self.__class__} doesn't implement merge function. This is a bug."
         )
@@ -411,7 +400,7 @@ class DataflowVisitor:
 def forward_dataflow(
     cfg: _CFG,
     name,
-    visitor: "DataflowVisitor",
+    visitor: DataflowVisitor,
     initial: DataflowValue,
 ):
     dataflow(
@@ -427,7 +416,7 @@ def forward_dataflow(
 def reverse_dataflow(
     cfg: _CFG,
     name,
-    visitor: "DataflowVisitor",
+    visitor: DataflowVisitor,
     initial: DataflowValue,
 ):
     dataflow(
@@ -443,7 +432,7 @@ def reverse_dataflow(
 def dataflow(
     cfg: _CFG,
     name,
-    visitor: "DataflowVisitor",
+    visitor: DataflowVisitor,
     initial: DataflowValue,
     predecessors,
     successors,
@@ -502,17 +491,20 @@ class FlatLatticeValue(DataflowValue):
         self.type = type
         self.value = value
 
-    @staticmethod
-    def undefined():
-        return FlatLatticeValue(FlatLatticeValue.Type.UNDEFINED, None)
+    @classmethod
+    def undefined(cls):
+        return cls(FlatLatticeValue.Type.UNDEFINED, None)
 
-    @staticmethod
-    def no_const():
-        return FlatLatticeValue(FlatLatticeValue.Type.NO_CONST, None)
+    @classmethod
+    def no_const(cls):
+        return cls(FlatLatticeValue.Type.NO_CONST, None)
 
-    @staticmethod
-    def value(value):
-        return FlatLatticeValue(FlatLatticeValue.Type.VALUE, value)
+    @classmethod
+    def value(cls, value: QiExpression):
+        assert isinstance(
+            value, QiExpression
+        ), f"Expected expression but got {value} of type {type(value)}"
+        return cls(FlatLatticeValue.Type.VALUE, value)
 
     def merge(self, other):
         assert isinstance(other, FlatLatticeValue)
@@ -543,7 +535,7 @@ class FlatLatticeValue(DataflowValue):
 
     def __str__(self):
         if self.type == FlatLatticeValue.Type.VALUE:
-            return f"{self.value}"
+            return str(self.value)
         else:
             return str(self.type)
 
@@ -563,13 +555,12 @@ class CellValues(DataflowValue):
     DataflowValue which generalises FlatLatticeValue so every cell has its own FlatLatticeValue.
     """
 
-    def __init__(self, values=None):
-        self.values = copy(values or {})
+    def __init__(self, values: dict[QiCell, FlatLatticeValue] | None = None):
+        self.values: dict[QiCell, FlatLatticeValue] = copy(values or {})
 
     @classmethod
-    def default(cls, cells: List[QiCell], value: FlatLatticeValue):
-        values = {cell: value for cell in cells}
-        return cls(values)
+    def default(cls, cells: list[QiCell], value: FlatLatticeValue):
+        return cls(dict.fromkeys(cells, value))
 
     def merge(self, other):
         assert isinstance(other, CellValues)
@@ -636,14 +627,13 @@ class CellValues(DataflowValue):
         self.values[idx] = val
 
     def __str__(self):
-        result = []
-        for cell, value in self.values.items():
-            result.append(f"{cell.cellID} -> {value}")
-
-        return ",\n".join(result)
+        return ",\n".join(
+            f"{cell.cell_id} -> {value}" for cell, value in self.values.items()
+        )
 
     def __eq__(self, other):
-        assert isinstance(other, CellValues)
+        if not isinstance(other, CellValues):
+            return False
 
         for cell, value in self.values.items():
             if value.type != FlatLatticeValue.Type.UNDEFINED and (

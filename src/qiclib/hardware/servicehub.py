@@ -19,13 +19,14 @@ hardware platform.
 The ServiceHub Control Interface is a standardized interface to query which
 functionalities are available within the current platform.
 """
-from typing import List
-from qiclib.hardware.platform_component import PlatformComponent
 
-from qiclib.packages.servicehub import ServiceHubCall
+from __future__ import annotations
+
 import qiclib.packages.grpc.datatypes_pb2 as dt
 import qiclib.packages.grpc.servicehubcontrol_pb2 as proto
 import qiclib.packages.grpc.servicehubcontrol_pb2_grpc as grpc_stub
+from qiclib.hardware.platform_component import PlatformComponent
+from qiclib.packages.servicehub import ServiceHubCall
 
 
 class ServiceHub(PlatformComponent):
@@ -54,7 +55,7 @@ class ServiceHub(PlatformComponent):
 
     @property
     @ServiceHubCall(errormsg="Could not get list of loaded ServiceHub plugins")
-    def plugin_list(self) -> List[str]:
+    def plugin_list(self) -> list[str]:
         """A list of all loaded ServiceHub plugins."""
         return self._stub.GetPluginList(dt.Empty()).str
 
@@ -64,15 +65,20 @@ class ServiceHub(PlatformComponent):
         return "TaskRunnerPlugin" in self.plugin_list
 
     @property
+    def has_rfdc(self) -> bool:
+        """If the RF Data Converter is available on the connected platform."""
+        return "TaskRunnerPlugin" in self.plugin_list
+
+    @property
     def has_direct_rf(self) -> bool:
-        """If the DirectRf plugin is available on the connected platform."""
+        """If the Direct RF plugin is available on the connected platform."""
         return "DirectRfPlugin" in self.plugin_list
 
     def reboot(self):
         """Reboots the whole platform."""
         self._stub.Reboot(dt.Empty())
 
-    def get_endpoints_of_plugin(self, plugin: str) -> List[str]:
+    def get_endpoints_of_plugin(self, plugin: str) -> list[str]:
         return list(self._stub.GetEndpointsOfPlugin(proto.String(str=plugin)).str)
 
     def get_endpoint_index_from_plugin(self, plugin: str, endpoint: str) -> int:

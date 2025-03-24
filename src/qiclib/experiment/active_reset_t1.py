@@ -14,11 +14,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """This file contains the Active Reset version of a T1 experiment for the QiController."""
+
 from qiclib.experiment.t1 import T1
 
 
 class ActiveResetT1(T1):
-    """Experiment to demonstrate quantum feedback by actively resetting the qubit to state \|0>
+    r"""Experiment to demonstrate quantum feedback by actively resetting the qubit to state \|0>
     by measuring it, applying a pi pulse if state is detected to be \|1>
     and finally performing another readout to check on the pulse.
 

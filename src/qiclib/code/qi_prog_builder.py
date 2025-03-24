@@ -16,64 +16,77 @@
 
 """
 This module contains the higher level parts of the code generation logic.
-The entry point is in `QiProgramBuilder.build_program` which uses the `ProgramBuilderVisitor`.
+The entry point is in `build_program` which uses the `ProgramBuilderVisitor`.
 `ProgramBuilderVisitor` recursively visits every `QiJob` command and generates its corresponding
 RISC-V assembly sequentially.
 """
 
-import copy
-from typing import List, Any, Dict, Union, Tuple, TYPE_CHECKING
+from __future__ import annotations
 
+import copy
+from typing import TYPE_CHECKING, Any
+
+import qiclib.packages.utility as util
+from qiclib.code.qi_command import (
+    DigitalTriggerCommand,
+    ForRangeCommand,
+    PlayCommand,
+    PlayFluxCommand,
+    PlayReadoutCommand,
+    RecordingCommand,
+    RotateFrameCommand,
+    WaitCommand,
+)
 from qiclib.code.qi_seq_instructions import SeqCellSync
 from qiclib.code.qi_var_definitions import (
-    _QiConstValue,
     QiCellProperty,
     QiExpression,
     QiType,
+    _QiConstValue,
     _QiVariableBase,
 )
-import qiclib.packages.utility as util
+
+from .qi_sequencer import Sequencer
+from .qi_util import _get_for_range_end_value, _get_for_range_iterations
 from .qi_visitor import (
-    QiCommandVisitor,
-    QiFindVarCmds,
     QiCMContainedCellVisitor,
     QiCmdVariableInspection,
+    QiCommandVisitor,
+    QiFindVarCmds,
 )
-from .qi_util import _get_for_range_iterations, _get_for_range_end_value
 
 if TYPE_CHECKING:
-    from .qi_jobs import QiCommand
+    from qiclib.code.qi_jobs import QiCell, QiCommand
 
 
 class QiCmdExcludeVar(QiCommandVisitor):
     """Generates command list excluding cell- and variable-commands which implement variables from ignore_list.
     Generates new context managers with updated bodies"""
 
-    def __init__(self, ignore_list: List[Any]) -> None:
+    def __init__(self, ignore_list: list[_QiVariableBase]) -> None:
         self.ignore_list = ignore_list
-        self.commands: List[QiCommand] = []
+        self.commands: list[QiCommand] = []
 
     def visit_cell_command(self, cell_cmd):
-        from .qi_jobs import _cQiPlay_base, cQiWait, cQiPlayReadout
+        from .qi_command import AnyPlayCommand, PlayReadoutCommand, WaitCommand
         from .qi_var_definitions import _QiVariableBase
 
         for variable in self.ignore_list:
-            if (
-                isinstance(cell_cmd, _cQiPlay_base)
-                and variable in cell_cmd._associated_variable_set
+            if isinstance(cell_cmd, AnyPlayCommand) and cell_cmd.is_variable_relevant(
+                variable
             ):
                 if (
-                    isinstance(cell_cmd, cQiPlayReadout)
+                    isinstance(cell_cmd, PlayReadoutCommand)
                     and cell_cmd.recording is not None
                 ):
                     self.commands.append(cell_cmd.recording)
                 return
             elif (
-                isinstance(cell_cmd, cQiWait)
+                isinstance(cell_cmd, WaitCommand)
                 and isinstance(cell_cmd.length, _QiVariableBase)
                 and cell_cmd.length.id == variable.id
             ):
-                # If cQiWait.length is QiCalc, append command
+                # If WaitCommand.length is QiCalc, append command
                 return
 
         self.commands.append(cell_cmd)
@@ -150,20 +163,19 @@ class QiCmdReplaceTriggerVar(QiCommandVisitor):
 
     def __init__(self, replace_var) -> None:
         self.replace_var = replace_var
-        self.commands: List[QiCommand] = []
+        self.commands: list[QiCommand] = []
 
     def visit_cell_command(self, cell_cmd):
-        from .qi_jobs import _cQiPlay_base, cQiPlayReadout, cQiRecording
+        from .qi_command import AnyPlayCommand, PlayReadoutCommand, RecordingCommand
 
-        if (
-            isinstance(cell_cmd, _cQiPlay_base)
-            and self.replace_var in cell_cmd._associated_variable_set
+        if isinstance(cell_cmd, AnyPlayCommand) and cell_cmd.is_variable_relevant(
+            self.replace_var
         ):
             new_cmd = copy.copy(cell_cmd)
             new_cmd._relevant_cells.update(cell_cmd._relevant_cells)
 
-            if isinstance(cell_cmd, cQiPlayReadout) and isinstance(
-                cell_cmd.recording, cQiRecording
+            if isinstance(cell_cmd, PlayReadoutCommand) and isinstance(
+                cell_cmd.recording, RecordingCommand
             ):
                 new_cmd.recording = copy.copy(cell_cmd.recording)
 
@@ -233,18 +245,19 @@ class QiCmdReplaceTriggerVar(QiCommandVisitor):
 
 
 class ProgramBuilderVisitor(QiCommandVisitor):
-    def __init__(self, cell_seq, job_cell_to_digital_unit_cell_map) -> None:
-        from .qi_sequencer import Sequencer
-        from .qi_jobs import QiCell
-
-        self.cell_seq: Dict[QiCell, Sequencer] = cell_seq
+    def __init__(
+        self,
+        cell_seq: dict[QiCell, Sequencer],
+        job_cell_to_digital_unit_cell_map: list[int],
+    ) -> None:
+        self.cell_seq = cell_seq
         self.if_depth: int = 0  # Used to check if currently processing commands inside If-Context-Manager
-        self.for_range_end_val_list: List[
-            Tuple[_QiVariableBase, Union[QiExpression, int]]
+        self.for_range_end_val_list: list[
+            tuple[_QiVariableBase, QiExpression | int]
         ] = []
         self.job_cell_to_digital_unit_cell_map = job_cell_to_digital_unit_cell_map
 
-    def get_relevant_cells(self, cmd):
+    def get_relevant_cells(self, cmd) -> list[QiCell]:
         """Generates a list of releveant cells from the cells registered to the builder and the command cmd"""
         return [cell for cell in self.cell_seq.keys() if cell in cmd._relevant_cells]
 
@@ -264,12 +277,10 @@ class ProgramBuilderVisitor(QiCommandVisitor):
     def force_sync(self, relevant_cells, sync_point):
         """Forces the given cells to synchronize by inserting a SeqCellSync instruction."""
 
-        digital_unit_cell_indices = list(
-            map(
-                lambda cell: self.job_cell_to_digital_unit_cell_map[cell.cellID],
-                relevant_cells,
-            )
-        )
+        digital_unit_cell_indices = [
+            self.job_cell_to_digital_unit_cell_map[cell.cell_id]
+            for cell in relevant_cells
+        ]
 
         for cell in relevant_cells:
             cell_sequencer = self.cell_seq[cell]
@@ -286,31 +297,20 @@ class ProgramBuilderVisitor(QiCommandVisitor):
         def all_share_syncpoint():
             return (
                 len(
-                    set(
-                        map(
-                            lambda cell: self.cell_seq[
-                                cell
-                            ]._prog_cycles.last_sync_point,
-                            cells,
-                        )
-                    )
+                    {self.cell_seq[cell]._prog_cycles.last_sync_point for cell in cells}
                 )
                 == 1
             )
 
         return all_valid and all_share_syncpoint()
 
-    def sync_cells(self, relevant_cells, sync_point):
+    def sync_cells(self, relevant_cells: list[QiCell], sync_point):
         """
         Synchronizes given cells, implicitly if possible, explicitly otherwise.
         If implicit synch is possible, it evaluates the current programm lengths of sequencers
         of relevant_cells. If valid prog_lengths are found adds Wait commands at sequencers
         with shorter programs.
         """
-
-        from .qi_jobs import QiCell
-
-        relevant_cells: List[QiCell] = relevant_cells
 
         if len(relevant_cells) <= 1:
             return
@@ -319,18 +319,17 @@ class ProgramBuilderVisitor(QiCommandVisitor):
             self.force_sync(relevant_cells, sync_point)
 
         else:
-            prog_lengths: List[int] = list(
-                map(lambda cell: self.cell_seq[cell].prog_cycles, relevant_cells)
+            longest_prog_len = max(
+                self.cell_seq[cell].prog_cycles for cell in relevant_cells
             )
-            longest = max(prog_lengths)
 
             for cell in relevant_cells:
-                if self.cell_seq[cell].prog_cycles < longest:
+                if self.cell_seq[cell].prog_cycles < longest_prog_len:
                     self.cell_seq[cell]._wait_cycles(
-                        longest - self.cell_seq[cell].prog_cycles
+                        longest_prog_len - self.cell_seq[cell].prog_cycles
                     )
 
-    def _unroll_loop_0(self, for_range, static_unroll=False):
+    def _unroll_loop_0(self, for_range: ForRangeCommand, static_unroll=False):
         """Function used for unrolling ForRange with variable value 0.
         A new program body is built from ForRange.body excluding wait and pulse commands using solely ForRange.var.
         The new program body is then added to the sequencer."""
@@ -345,7 +344,7 @@ class ProgramBuilderVisitor(QiCommandVisitor):
         relevant_cells = self.get_relevant_cells(for_range)
 
         for cell in relevant_cells:
-            if static_unroll is True:
+            if static_unroll:
                 # set register value to 0 in case it had different values before --> important for possible use in conditions
                 self.cell_seq[cell].set_variable_value(for_range.var, 0)
             # register one cycle of ForRange, actual start/end/step values not relevant
@@ -379,21 +378,11 @@ class ProgramBuilderVisitor(QiCommandVisitor):
         for cell in relevant_cells:
             self.cell_seq[cell].exit_for_range()
 
-    def visit_cell_command(self, cell_cmd):
-        from .qi_jobs import (
-            cQiWait,
-            cQiPlay,
-            cQiPlayReadout,
-            cQiPlayFlux,
-            cQiRotateFrame,
-            cQiRecording,
-            cQiDigitalTrigger,
-        )
-
+    def visit_cell_command(self, cell_cmd: QiCommand):
         relevant_cells = self.get_relevant_cells(cell_cmd)
 
         for cell in relevant_cells:
-            if isinstance(cell_cmd, cQiWait):
+            if isinstance(cell_cmd, WaitCommand):
                 # Ignore Wait command if it is of length less than a cycle.
                 length = cell_cmd.length
                 if (
@@ -403,19 +392,19 @@ class ProgramBuilderVisitor(QiCommandVisitor):
                     return
 
                 self.cell_seq[cell].add_wait_cmd(cell_cmd)
-            elif isinstance(cell_cmd, (cQiPlay, cQiRotateFrame)):
+            elif isinstance(cell_cmd, (PlayCommand, RotateFrameCommand)):
                 self.cell_seq[cell].add_trigger_cmd(
                     manipulation=cell_cmd,
                     var_single_cycle=cell_cmd._var_single_cycle_trigger,
                 )
-            elif isinstance(cell_cmd, cQiPlayReadout):
-                # cell_cmd.combine_recording is either None or cQiRecording
+            elif isinstance(cell_cmd, PlayReadoutCommand):
+                # cell_cmd.combine_recording is either None or RecordingCommand
                 self.cell_seq[cell].add_trigger_cmd(
                     readout=cell_cmd,
                     recording=cell_cmd.recording,
                     var_single_cycle=cell_cmd._var_single_cycle_trigger,
                 )
-            elif isinstance(cell_cmd, cQiPlayFlux):
+            elif isinstance(cell_cmd, PlayFluxCommand):
                 if cell_cmd.coupler.coupling_index == 0:
                     self.cell_seq[cell].add_trigger_cmd(coupling0=cell_cmd)
                 elif cell_cmd.coupler.coupling_index == 1:
@@ -424,9 +413,9 @@ class ProgramBuilderVisitor(QiCommandVisitor):
                     raise RuntimeError(
                         f"Illegal coupling index {cell_cmd.coupler.coupling_index} (must be 0 or 1)"
                     )
-            elif isinstance(cell_cmd, cQiRecording):
+            elif isinstance(cell_cmd, RecordingCommand):
                 self.cell_seq[cell].add_trigger_cmd(recording=cell_cmd)
-            elif isinstance(cell_cmd, cQiDigitalTrigger):
+            elif isinstance(cell_cmd, DigitalTriggerCommand):
                 self.cell_seq[cell].add_trigger_cmd(digital=cell_cmd)
 
     def visit_context_manager(self, context_manager):
@@ -486,12 +475,12 @@ class ProgramBuilderVisitor(QiCommandVisitor):
         """Visits Parallel command and builds sequencer command.
         Searches for manipulation, readout and recording pulses inside body and summarizes them in one trigger command.
         """
-        from .qi_jobs import (
-            cQiPlay,
-            cQiPlayReadout,
-            cQiRotateFrame,
-            cQiRecording,
-            cQiWait,
+        from .qi_command import (
+            PlayCommand,
+            PlayReadoutCommand,
+            RecordingCommand,
+            RotateFrameCommand,
+            WaitCommand,
         )
         from .qi_sequencer import Sequencer, _ProgramCycles
 
@@ -503,8 +492,10 @@ class ProgramBuilderVisitor(QiCommandVisitor):
             time_slots = parallel_cm._generate_command_body(cell, self.cell_seq[cell])
 
             for time_slot in time_slots:
-                if isinstance(time_slot.cmd_tuples[0].cmd, cQiWait):
-                    self.cell_seq[cell].add_wait_cmd(cQiWait(cell, time_slot.duration))
+                if isinstance(time_slot.cmd_tuples[0].cmd, WaitCommand):
+                    self.cell_seq[cell].add_wait_cmd(
+                        WaitCommand(cell, time_slot.duration)
+                    )
                 else:
                     manipulation = None
                     readout = None
@@ -514,13 +505,13 @@ class ProgramBuilderVisitor(QiCommandVisitor):
                         trigger_cmd = copy.copy(cmd_tuple.cmd)
                         trigger_cmd.length = time_slot.duration
 
-                        if isinstance(cmd_tuple.cmd, (cQiPlay, cQiRotateFrame)):
+                        if isinstance(cmd_tuple.cmd, (PlayCommand, RotateFrameCommand)):
                             if cmd_tuple.choke_cmd is True:
                                 trigger_cmd.trigger_index = Sequencer.CHOKE_PULSE_INDEX
 
                             manipulation = trigger_cmd
 
-                        elif isinstance(cmd_tuple.cmd, cQiPlayReadout):
+                        elif isinstance(cmd_tuple.cmd, PlayReadoutCommand):
                             if cmd_tuple.choke_cmd is True:
                                 trigger_cmd.trigger_index = Sequencer.CHOKE_PULSE_INDEX
                                 trigger_cmd.recording = None
@@ -528,7 +519,7 @@ class ProgramBuilderVisitor(QiCommandVisitor):
                             readout = trigger_cmd
                             recording = trigger_cmd.recording
 
-                        elif isinstance(cmd_tuple.cmd, cQiRecording):
+                        elif isinstance(cmd_tuple.cmd, RecordingCommand):
                             recording = trigger_cmd
 
                     self.cell_seq[cell].add_trigger_cmd(
@@ -538,13 +529,13 @@ class ProgramBuilderVisitor(QiCommandVisitor):
                         recording_delay=False,
                     )
 
-    def try_sync_for_range(self, for_range, start_val: "QiExpression"):
+    def try_sync_for_range(self, for_range, start_val: QiExpression):
         """If multiple cells are used inside a ForRange context manager the program tries to sync cells before restarting the loop.
         If the ForRange does not use its variable for Pulses or waits a normal sync is used.
         """
-        from .qi_var_definitions import _QiVariableBase
-        from .qi_jobs import cQiWait
+        from .qi_command import WaitCommand
         from .qi_sequencer import _ProgramCycles
+        from .qi_var_definitions import _QiVariableBase
 
         relevant_cells = self.get_relevant_cells(for_range)
 
@@ -585,7 +576,7 @@ class ProgramBuilderVisitor(QiCommandVisitor):
         if isinstance(start_val, (_QiConstValue, QiCellProperty)):
             start_val = start_val.value
 
-        prog_lengths: List[int] = []
+        prog_lengths: list[int] = []
         wait_cmds = {}
         for cell in relevant_cells:
             wait_cmds[cell] = [
@@ -625,15 +616,15 @@ class ProgramBuilderVisitor(QiCommandVisitor):
             waits = len(wait_cmds[cell])
             for _ in range(waits, most_waits):
                 self.cell_seq[cell].add_wait_cmd(
-                    cQiWait(None, for_range.var)
+                    WaitCommand(None, for_range.var)
                 )  # add missing waits, no multiplication to avoid overflows
 
     def update_cycles_after_for_range(self, for_range, start_val, program_cycles_start):
         """First iteration of loop was already added to sequencer; so every variable wait already used start_val cycles.
         If variable start/end are used, sets _prog_cycles to False."""
-        from .qi_var_definitions import _QiVariableBase
-        from .qi_jobs import cQiWait, _cQiPlay_base
+        from .qi_command import AnyPlayCommand, WaitCommand
         from .qi_sequencer import _ProgramCycles
+        from .qi_var_definitions import _QiVariableBase
 
         relevant_cells = self.get_relevant_cells(for_range)
 
@@ -664,12 +655,12 @@ class ProgramBuilderVisitor(QiCommandVisitor):
             wait_cmds[cell] = [
                 cmd
                 for cmd in find_var_visitor.found_cmds
-                if cell in cmd._relevant_cells and isinstance(cmd, cQiWait)
+                if cell in cmd._relevant_cells and isinstance(cmd, WaitCommand)
             ]
             play_cmds[cell] = [
                 cmd
                 for cmd in find_var_visitor.found_cmds
-                if cell in cmd._relevant_cells and isinstance(cmd, _cQiPlay_base)
+                if cell in cmd._relevant_cells and isinstance(cmd, AnyPlayCommand)
             ]
 
         for cell in relevant_cells:
@@ -678,13 +669,15 @@ class ProgramBuilderVisitor(QiCommandVisitor):
 
             if len(find_var_visitor.found_cmds) == 0:
                 self.cell_seq[cell].prog_cycles += (
-                    self.cell_seq[cell].prog_cycles - program_cycles_start[cell]
-                ) * (
-                    _get_for_range_iterations(start_val, end_val, for_range.step.value)
-                    - 1
-                ) + self.cell_seq[
-                    cell
-                ].JUMP_EXECUTION_CYCLES  # last execution of branch, jumping over loop body, adds number of Jump Cycles
+                    (self.cell_seq[cell].prog_cycles - program_cycles_start[cell])
+                    * (
+                        _get_for_range_iterations(
+                            start_val, end_val, for_range.step.value
+                        )
+                        - 1
+                    )
+                    + self.cell_seq[cell].JUMP_EXECUTION_CYCLES
+                )  # last execution of branch, jumping over loop body, adds number of Jump Cycles
             elif find_var_visitor.calc_in_wait is False:
                 # calculate cycles for not variable cmds
                 new_cycles = (
@@ -728,7 +721,7 @@ class ProgramBuilderVisitor(QiCommandVisitor):
         else:
             return val.pop()
 
-    def get_for_range_val(self, val: QiExpression, cells) -> Union[int, float, None]:
+    def get_for_range_val(self, val: QiExpression, cells) -> int | float | None:
         """Returns the value of `val`, depending on the instance and the relevant cells.
         If `val` is _QiVariableBase, it is checked if the value is the same on each cell's sequencer, else None is returned
         """
@@ -784,16 +777,16 @@ class ProgramBuilderVisitor(QiCommandVisitor):
     def implement_for_range(
         self,
         for_range,
-        start: Union[QiExpression, int],
-        end: Union[QiExpression, int],
+        start: QiExpression | int,
+        end: QiExpression | int,
         relevant_cells,
         var_unroll_last=False,
     ):
         """Implements ForRange. Tries to sync relevant cells, before loop is entered. Sync also is tried after body of loop, before restarting
         loop. Also tries to update program cycles after execution. While building the body self.for_range_end_val_list is added to,
         in order to communicate the used variables to inner ForRanges"""
-        from .qi_var_definitions import QiOp, _QiVariableBase
         from .qi_sequencer import _ProgramCycles
+        from .qi_var_definitions import QiOp, _QiVariableBase
 
         assert isinstance(start, (QiExpression, int))
 
@@ -895,8 +888,8 @@ class ProgramBuilderVisitor(QiCommandVisitor):
     def implement_static_time_for_range(self, for_range, relevant_cells):
         """Is used when using QiTimeVariable and static start values and static end values.
         If necessary, unrolled loops are added sequentially"""
-        from .qi_var_definitions import _QiVariableBase
         from .qi_sequencer import _ProgramCycles
+        from .qi_var_definitions import _QiVariableBase
 
         start_val = for_range.start
         end_val = _get_for_range_end_value(
@@ -971,8 +964,8 @@ class ProgramBuilderVisitor(QiCommandVisitor):
         The variable start value is first loaded to the loop variable. Afterwards conditions are added to check if the
         loop variables value is 0, 1 or >1 and the respective loops are executed and loop var is increased.
         """
-        from .qi_var_definitions import QiOp
         from .qi_sequencer import _ProgramCycles
+        from .qi_var_definitions import QiOp
 
         branch_instr = {}
         program_counters = {}
@@ -1125,7 +1118,7 @@ class ProgramBuilderVisitor(QiCommandVisitor):
         Simplest case is the use of QiVariables as loop variable;
         When using QiTimeVariables loops need to be unrolled depending on start and end values and if those are variables themselves.
         """
-        from .qi_var_definitions import _QiVariableBase
+        from qiclib.code.qi_var_definitions import _QiVariableBase
 
         # Originally, before the switch to a unified QiExpression system, we used pythons dynamic types
         # and passed a variety of types to represent variables, constants, expressions which didn't really
@@ -1139,7 +1132,7 @@ class ProgramBuilderVisitor(QiCommandVisitor):
 
         relevant_cells = self.get_relevant_cells(for_range_cm)
 
-        if for_range_cm.var.type == QiType.NORMAL:
+        if for_range_cm.var.type in {QiType.NORMAL, QiType.PHASE, QiType.AMPLITUDE}:
             self.implement_for_range(
                 for_range_cm,
                 for_range_cm.start,
@@ -1175,7 +1168,8 @@ class ProgramBuilderVisitor(QiCommandVisitor):
         If Assign.val is _QiCalcBase, QiCalc is evaluated and its final register is used to write to Assign.var; After that the register is released again.
         If Assign.val is _QiVariableBase, the variable's register is used to write to Assign.var
         """
-        from .qi_jobs import _QiVariableBase, _QiCalcBase
+        from .qi_jobs import _QiVariableBase
+        from .qi_var_definitions import _QiCalcBase
 
         relevant_cells = self.get_relevant_cells(assign_cmd)
 
@@ -1232,75 +1226,62 @@ class ProgramBuilderVisitor(QiCommandVisitor):
             )
 
 
-class QiProgramBuilder:
-    def __init__(
-        self,
-        cell_list: List[Any],
-        cell_map: List[Any],
-        command_list: List[Any],
-        skip_nco_sync: bool = False,
-        nco_sync_length: float = 0,
-    ) -> None:
-        from .qi_sequencer import Sequencer
+def _assign_cell_to_context_manager(commands: list[QiCommand]):
+    contained_cells_visitor = QiCMContainedCellVisitor()
+    for command in commands:
+        command.accept(contained_cells_visitor)
 
-        self.cell_seq_dict: Dict[Any, Sequencer] = {}
-        self.result_boxes = []
 
-        for cell, index in zip(cell_list, cell_map):
-            self.cell_seq_dict[cell] = Sequencer(cell_index=index)
+def _assign_variables_to_cell(commands: list[QiCommand]):
+    cell_to_variable_visitor = QiCmdVariableInspection()
+    for command in reversed(commands):
+        command.accept(cell_to_variable_visitor)
 
-            for resultbox in cell._result_container.values():
-                self.result_boxes.append(resultbox)
+    # run again, to ensure all Assignment statements are considered as well
+    _assign_cell_to_context_manager(commands)
 
-        self.cell_map = cell_map
 
-        self.command_list = command_list
+def build_program(
+    cell_list: list[QiCell],
+    cell_map: list[int],
+    command_list: list[QiCommand],
+    skip_nco_sync: bool = False,
+    nco_sync_length: float = 0,
+) -> dict[QiCell, Sequencer]:
+    cell_seq_dict = {}
+    result_boxes = []
 
-        self.skip_nco = skip_nco_sync
-        self.nco_length = nco_sync_length
+    for cell, index in zip(cell_list, cell_map):
+        cell_seq_dict[cell] = Sequencer(cell_index=index)
 
-    @staticmethod
-    def assign_cell_to_context_manager(commands: List[Any]):
-        contained_cells_visitor = QiCMContainedCellVisitor()
-        for command in commands:
-            command.accept(contained_cells_visitor)
+        for resultbox in cell._result_container.values():
+            result_boxes.append(resultbox)
 
-    @staticmethod
-    def assign_variables_to_cell(commands: List[Any]):
-        cell_to_variable_visitor = QiCmdVariableInspection()
-        for command in reversed(commands):
-            command.accept(cell_to_variable_visitor)
+    for cell, sequencer in cell_seq_dict.items():
+        cell.reset()
 
-        QiProgramBuilder.assign_cell_to_context_manager(
-            commands
-        )  # run again, to ensure all Assignment statements are considered as well
+        if not skip_nco_sync:
+            sequencer.add_nco_sync(nco_sync_length)
 
-    def build_program(self):
-        for cell, sequencer in self.cell_seq_dict.items():
-            cell.reset()
+    _assign_cell_to_context_manager(command_list)
+    _assign_variables_to_cell(command_list)
 
-            if self.skip_nco is False:
-                sequencer.add_nco_sync(self.nco_length)
+    prog_builder = ProgramBuilderVisitor(cell_seq_dict, cell_map)
 
-        self.assign_cell_to_context_manager(self.command_list)
+    for command in command_list:
+        command.accept(prog_builder)
 
-        self.assign_variables_to_cell(self.command_list)
+    for sequencer in cell_seq_dict.values():
+        sequencer.end_of_program()
 
-        prog_builder = ProgramBuilderVisitor(self.cell_seq_dict, self.cell_map)
+    return cell_seq_dict
 
-        for command in self.command_list:
-            command.accept(prog_builder)
 
-        for sequencer in self.cell_seq_dict.values():
-            sequencer.end_of_program()
-
-        return self.cell_seq_dict
-
-    def get_all_variables(self) -> Dict[Any, Dict[Any, int]]:
-        vars: Dict[Any, Dict[Any, int]] = {}
-        for cell, seq in self.cell_seq_dict.items():
-            for var in cell._relevant_vars:
-                if var not in vars:
-                    vars[var] = {}
-                vars[var][cell] = seq.get_var_register(var).adr
-        return vars
+def get_all_variables(cell_seq_dict) -> dict[Any, dict[Any, int]]:
+    vars: dict[Any, dict[Any, int]] = {}
+    for cell, seq in cell_seq_dict.items():
+        for var in cell._relevant_vars:
+            if var not in vars:
+                vars[var] = {}
+            vars[var][cell] = seq.get_var_register(var).adr
+    return vars

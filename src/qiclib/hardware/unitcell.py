@@ -55,23 +55,25 @@ the same DAC channel for frequency-division-multiplexed readout and control.
 .. todo:: Add information on how this signal routing is performed / configured.
 
 """
+
+from __future__ import annotations
+
 import sys
-from typing import Dict, List, TYPE_CHECKING
+from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from qiclib.hardware.platform_component import PlatformComponent
-
-from qiclib.packages.servicehub import ServiceHubCall
-import qiclib.packages.grpc.qic_unitcell_pb2 as proto
 import qiclib.packages.grpc.datatypes_pb2 as dt
+import qiclib.packages.grpc.qic_unitcell_pb2 as proto
 import qiclib.packages.grpc.qic_unitcell_pb2_grpc as grpc_stub
-
-from qiclib.hardware.sequencer import Sequencer
+from qiclib.hardware.digital_trigger import DigitalTrigger
+from qiclib.hardware.platform_component import PlatformComponent
 from qiclib.hardware.pulsegen import PulseGen
 from qiclib.hardware.recording import Recording
+from qiclib.hardware.sequencer import Sequencer
 from qiclib.hardware.storage import Storage
-from qiclib.hardware.digital_trigger import DigitalTrigger
+from qiclib.packages.servicehub import ServiceHubCall
 
 if TYPE_CHECKING:
     from qiclib.hardware.controller import QiController
@@ -90,12 +92,12 @@ class UnitCell:
     .. code-block:: python
 
         qic = QiController("ip-address")
-        qic.cell[5].busy # if the 6th digital unit cell in the QiController is busy
-        qic.cell[3].sequencer.start_at(0) # start the sequencer in the 4th cell
+        qic.cell[5].busy  # if the 6th digital unit cell in the QiController is busy
+        qic.cell[3].sequencer.start_at(0)  # start the sequencer in the 4th cell
 
     """
 
-    def __init__(self, index: int, cells: "UnitCells", info: proto.CellInfo):  # type: ignore
+    def __init__(self, index: int, cells: UnitCells, info: proto.CellInfo):  # type: ignore
         self._index = index
         self._cells = cells
         controller: QiController = cells._qip
@@ -123,6 +125,9 @@ class UnitCell:
             controller,
             index=info.digital_trigger,
         )
+
+    def start(self):
+        self._cells.start([self._index])
 
     @property
     def sequencer(self) -> Sequencer:
@@ -182,7 +187,7 @@ class UnitCell:
         return self._index in self._cells.busy_cells
 
 
-class UnitCells(PlatformComponent):
+class UnitCells(PlatformComponent, Mapping):
     """The list of all digital unit cells plus access to the cell coordinator.
 
     Individual unit cells can be accessed using the index operator.
@@ -206,8 +211,17 @@ class UnitCells(PlatformComponent):
     ):
         super().__init__(name, connection, controller, qkit_instrument)
         self._stub = grpc_stub.UnitCellServiceStub(self._conn.channel)
-        self._cells: List[UnitCell] = []
+        self._cells: list[UnitCell] = []
         self._update_cells()
+
+    def __iter__(self):
+        return iter(self._cells)
+
+    def __len__(self) -> int:
+        return self.count
+
+    def __getitem__(self, key: int) -> UnitCell:
+        return self._cells[int(key)]
 
     @ServiceHubCall(errormsg="Could not obtain digital unit cell information.")
     def _update_cells(self):
@@ -216,16 +230,10 @@ class UnitCells(PlatformComponent):
         for i, cell in enumerate(info.cells):
             self._cells.append(UnitCell(i, self, cell))
 
-    def __getitem__(self, key):
-        return self._cells[int(key)]
-
     @property
     def count(self):
         """The number of digital unit cells available in the QiController."""
         return len(self._cells)
-
-    def __len__(self):
-        return self.count
 
     @ServiceHubCall
     def start_all(self):
@@ -241,7 +249,7 @@ class UnitCells(PlatformComponent):
         self._stub.StartCells(proto.StartCellInfo(all_cells=True))
 
     @ServiceHubCall
-    def start(self, cells: List[int]):
+    def start(self, cells: list[int]):
         """Starts the sequencers of the given digital unit cells synchronously.
 
         If you want to start all cells, you can use `UnitCells.start_all` instead.
@@ -256,7 +264,7 @@ class UnitCells(PlatformComponent):
         """
         self._stub.StartCells(proto.StartCellInfo(cells=cells))
 
-    def start_at(self, addresses: Dict[int, int]):
+    def start_at(self, addresses: dict[int, int]):
         """Starts the given cells (keys) at the given sequencer addresses (values).
 
         If you us the same sequencer start addresses every time, you can set them once
@@ -285,7 +293,7 @@ class UnitCells(PlatformComponent):
 
     @property
     @ServiceHubCall
-    def busy_cells(self) -> List[int]:
+    def busy_cells(self) -> list[int]:
         """A list with the indices of all digital unit cells that are currently busy."""
         return self._stub.GetBusyCells(dt.Empty()).cells
 
@@ -321,8 +329,8 @@ class UnitCells(PlatformComponent):
     def run_experiment(
         self,
         averages: int,
-        cells: List[int],
-        recordings: List[int],
+        cells: list[int],
+        recordings: list[int],
         data_collection: str = "average",
         progress_callback=None,
     ):

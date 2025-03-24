@@ -14,10 +14,11 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """This file contains the IQCloud experiment description for the QiController."""
+
 import numpy as np
 
-from qiclib.experiment.base import BaseExperiment
 import qiclib.packages.utility as util
+from qiclib.experiment.base import BaseExperiment
 
 
 class CorrelationCalibration(BaseExperiment):
@@ -52,9 +53,8 @@ class CorrelationCalibration(BaseExperiment):
                 "calibration": lambda code: (
                     code
                     # Synchronize NCOs of recording modules
-                    .trigger_immediate(
-                        0, readout=15, recording=15, external=15
-                    ).trigger_readout(delay=self._readout_delay)
+                    .trigger_immediate(0, readout=15, recording=15, external=15)
+                    .trigger_readout(delay=self._readout_delay)
                     # Overwrite T_rep -> do not need to wait (faster averaging)
                     .end_of_experiment(self._trep)
                 )

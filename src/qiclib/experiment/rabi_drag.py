@@ -14,15 +14,17 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """This file contains the rabi experiment description for the QiController."""
+
 import warnings
+
 import numpy as np
 
-from qiclib.experiment.base import BaseExperiment
 import qiclib.packages.utility as util
+from qiclib.experiment.base import BaseExperiment
 
 
 class RabiDRAG(BaseExperiment):
-    """Rabi experiment driving the qubit between the states \|0> and \|1> using DRAG pulses.
+    r"""Rabi experiment driving the qubit between the states \|0> and \|1> using DRAG pulses.
     Outputs pulses at the qubit frequency of
     different duration and measures in which state the qubit is. Can be
     used to determine pulse duration for pi and pi/2 rotation pulses.

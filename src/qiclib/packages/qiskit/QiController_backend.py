@@ -15,21 +15,26 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import datetime
+from typing import TYPE_CHECKING
 
-from tzlocal import get_localzone
-
+from qiskit import qobj as qobj_mod
+from qiskit.circuit import Instruction, Qubit
+from qiskit.circuit.quantumcircuit import QuantumCircuit
+from qiskit.exceptions import QiskitError
 from qiskit.providers import BackendV1 as Backend
 from qiskit.providers import Options
 from qiskit.providers.models import BackendConfiguration
-from qiskit.providers.models.backendproperties import Nduv, Gate
-from qiskit import qobj as qobj_mod
-from qiskit.exceptions import QiskitError
+from qiskit.providers.models.backendproperties import Gate, Nduv
+from tzlocal import get_localzone
 
-from qiclib.packages.qiskit import QiGates
-
-from qiclib.packages.qiskit.QiController_job import QiController_job
-from qiclib.packages.constants import CONTROLLER_CYCLE_TIME
+import qiclib
 from qiclib.code import *  # pylint: disable=unused-wildcard-import,wildcard-import
+from qiclib.packages.constants import CONTROLLER_CYCLE_TIME
+from qiclib.packages.qiskit import QiGates
+from qiclib.packages.qiskit.QiController_job import QiController_job
+
+if TYPE_CHECKING:
+    from qiclib.packages.qiskit.QiController_provider import QiController_provider
 
 qicode_gates = [
     "X_gate",
@@ -73,7 +78,6 @@ def reverse_string(x):
 
 
 class QiController_backend(Backend):
-
     """
     The QiController_backend class translates the Qiskit code to QiCode and runs the corresponding QiJob on the QiController backend
 
@@ -90,7 +94,7 @@ class QiController_backend(Backend):
 
     def __init__(
         self,
-        provider,
+        provider: "QiController_provider",
     ):
         self.backend = provider.backend
         self.sample = provider.sample
@@ -98,7 +102,7 @@ class QiController_backend(Backend):
 
         self._configuration = {
             "backend_name": self.backend.ip_address,
-            "backend_version": self.backend.driver_version,
+            "backend_version": qiclib.__version__,
             "n_qubits": len(self.sample.cells),
             "routing_map": self.sample.cell_map,
             "basis_gates": ["i", "u1", "u2", "u3", "cx"],
@@ -115,7 +119,7 @@ class QiController_backend(Backend):
 
         self._properties = {
             "backend_name": self.backend.ip_address,
-            "backend_version": self.backend.driver_version,
+            "backend_version": qiclib.__version__,
             "last_update_date": "2021-08-23T14:28:23.382748",
             "gates": [
                 Gate(
@@ -280,109 +284,102 @@ class QiController_backend(Backend):
         """
         return Options(shots=1024, memory=False)
 
-    def circuit_to_qic(self, circuit):
+    def circuit_to_qic(self, circuit: QuantumCircuit):
         """Translate Qiskit code to QiCode and create a QiJob
 
         :param circuit:
           Quantum circuit in Qiskit code
-        :type circuit: QuantumCircuit
 
-        :raises Exception:
+        :raises RuntimeError:
           if a quantum operation is not supported by the QiController backend
 
         :return:
             The QiJob with equivalent instructions as the Qiskit circuit
-
         """
-
         with QiJob() as job:
             cells = QiCells(circuit.num_qubits + len(self.coupling_map))
             state = [QiStateVariable() for _ in range(circuit.num_qubits)]
 
-            for gate in circuit.data:
-                if gate[0].condition is None:
-                    if gate[0].name in qiskit_to_qicode:
-                        if len(gate[1]) == 1:
-                            if gate[0].name == "measure":
+            for gate in circuit.data:  # type: CircuitInstruction
+                instr: Instruction = gate[0]
+                qubits: list[Qubit] = gate[1]
+                if instr.condition is None:
+                    if instr.name in qiskit_to_qicode:
+                        if len(qubits) == 1:
+                            if instr.name == "measure":
                                 QiGates.Measure(
-                                    cells[gate[1][0].index],
-                                    state_to=state[gate[1][0].index],
+                                    cells[qubits[0]._index],
+                                    state_to=state[qubits[0]._index],
                                 )
-
                             else:
-                                qiskit_to_qicode[gate[0].name](
-                                    cells[gate[1][0].index], *gate[0].params
+                                qiskit_to_qicode[instr.name](
+                                    cells[qubits[0]._index], *instr.params
                                 )
-
-                        elif len(gate[1]) == 2:
+                        elif len(qubits) == 2:
                             if (
-                                [gate[1][0].index, gate[1][1].index]
+                                [qubits[0]._index, qubits[1]._index]
                                 in self.coupling_map
                             ) and (
-                                [gate[1][1].index, gate[1][0].index]
+                                [qubits[1]._index, qubits[0]._index]
                                 in self.coupling_map
                             ):
                                 raise RuntimeError(
-                                    f"Only one coupling map of the qubits {[gate[1][0].index, gate[1][1].index]} has to be included in the list"
+                                    f"Only one coupling map of the qubits {[qubits[0]._index, qubits[1]._index]} has to be included in the list"
                                 )
 
                             if [
-                                gate[1][0].index,
-                                gate[1][1].index,
+                                qubits[0]._index,
+                                qubits[1]._index,
                             ] in self.coupling_map:
                                 coupling_cell_index = (
                                     circuit.num_qubits
                                     + self.coupling_map.index(
-                                        [gate[1][0].index, gate[1][1].index]
+                                        [qubits[0]._index, qubits[1]._index]
                                     )
                                 )
                             elif [
-                                gate[1][1].index,
-                                gate[1][0].index,
+                                qubits[1]._index,
+                                qubits[0]._index,
                             ] in self.coupling_map:
                                 coupling_cell_index = (
                                     circuit.num_qubits
                                     + self.coupling_map.index(
-                                        [gate[1][1].index, gate[1][0].index]
+                                        [qubits[1]._index, qubits[0]._index]
                                     )
                                 )
 
                             else:
                                 raise RuntimeError(
-                                    f"The coupling map of the qubits {[gate[1][0].index, gate[1][1].index]} is not included"
+                                    f"The coupling map of the qubits {[qubits[0]._index, qubits[1]._index]} is not included"
                                 )
 
-                            qiskit_to_qicode[gate[0].name](
-                                cells[gate[1][0].index],
-                                cells[gate[1][1].index],
+                            qiskit_to_qicode[instr.name](
+                                cells[qubits[0]._index],
+                                cells[qubits[1]._index],
                                 cells[coupling_cell_index],
                             )
-
-                    elif gate[0].name == "barrier":
+                    elif instr.name == "barrier":
                         Sync(
                             *[
-                                cells[gate[1][qubit].index]
-                                for qubit in range(len(gate[1]))
+                                cells[qubits[qubit]._index]
+                                for qubit in range(len(qubits))
                             ]
                         )
-
                     else:
                         raise RuntimeError(
-                            f"Operation {gate[0].name} is not supported by the QiController"
+                            f"Operation {instr.name} is not supported by the QiController"
                         )
-
-                elif gate[0].condition is not None:
-                    with If(state[gate[1][0].index] == gate[0].condition[1]):
-                        if gate[0].name in qiskit_to_qicode:
-                            qiskit_to_qicode[gate[0].name](
-                                cells[gate[0].condition[0][0].index], *gate[0].params
+                else:
+                    with If(state[qubits[0]._index] == instr.condition[1]):
+                        if instr.name in qiskit_to_qicode:
+                            qiskit_to_qicode[instr.name](
+                                cells[instr.condition[0][0].index], *instr.params
                             )
 
                         else:
                             raise RuntimeError(
-                                f"Operation {gate[0].name} is not supported by the QiController"
+                                f"Operation {instr.name} is not supported by the QiController"
                             )
-
         return job
 
     def run(self, run_input, shots=None, memory=False):
@@ -400,7 +397,6 @@ class QiController_backend(Backend):
 
         :return:
             QiController_job object
-
         """
         if shots is None:
             shots = self._default_options().shots

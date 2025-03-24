@@ -13,23 +13,24 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-from typing import List
 import numpy as np
-from qiclib.hardware.controller import QiController
+
 import qiclib.packages.utility as util
 from qiclib.code import (
+    Assign,
+    Else,
+    If,
+    QiCells,
+    QiJob,
     QiSample,
     QiTimeVariable,
     QiVariable,
-    Assign,
-    QiCells,
-    If,
-    Else,
     Wait,
-    QiJob,
 )
+from qiclib.hardware.controller import QiController
+
 from .base import QiCodeExperiment
-from .collection import PiPulse, PiHalfPulse, Readout, Thermalize
+from .collection import PiHalfPulse, PiPulse, Readout, Thermalize
 
 
 class QubitTimes(QiCodeExperiment):

@@ -101,22 +101,26 @@ see :meth:`Recording.get_averaged_result`.
 Different operation modes of the signal recorder can be distinguished, based on the
 received trigger value, see :class:`RecordingTrigger` for details.
 """
-from typing import Any, Dict, List, Tuple, Union
+
+from __future__ import annotations
+
 import warnings
 from enum import Enum
 from numbers import Number
-import numpy as np
+from typing import Any
 
+import numpy as np
+import numpy.typing as npt
+
+import qiclib.packages.grpc.datatypes_pb2 as dt
+import qiclib.packages.grpc.recording_pb2 as proto
+import qiclib.packages.grpc.recording_pb2_grpc as grpc_stub
 from qiclib.hardware.platform_component import (
     PlatformComponent,
     platform_attribute,
     platform_attribute_collector,
 )
-
 from qiclib.packages.servicehub import ServiceHubCall
-import qiclib.packages.grpc.recording_pb2 as proto
-import qiclib.packages.grpc.datatypes_pb2 as dt
-import qiclib.packages.grpc.recording_pb2_grpc as grpc_stub
 
 
 class RecordingTrigger(Enum):
@@ -200,9 +204,6 @@ class Recording(PlatformComponent):
         try:
             self.recording_duration = sample.rec_duration
             self.trigger_offset = sample.rec_offset
-            # self.phase_offset = sample.rec_phase
-            # self.value_shift_offset = sample.rec_shift_offset
-            # self.average_shift = sample.rec_shift_average
         except AttributeError as e:
             raise AttributeError(
                 "Recording configuration has to be defined in the sample object! Please configure the readout"
@@ -298,7 +299,7 @@ class Recording(PlatformComponent):
 
     @property
     @ServiceHubCall
-    def last_trigger(self) -> Union[RecordingTrigger, int]:
+    def last_trigger(self) -> RecordingTrigger | int:
         """The last trigger processed by the module."""
         trigger: int = self._stub.GetLastTrigger(self._component).value
         try:
@@ -307,7 +308,7 @@ class Recording(PlatformComponent):
             return trigger
 
     @ServiceHubCall
-    def trigger_manually(self, trigger):
+    def trigger_manually(self, trigger: RecordingTrigger | int):
         """Manually triggers the signal recorder."""
         if not isinstance(trigger, RecordingTrigger):
             # This will throw a ValueError if trigger is not valid
@@ -428,43 +429,27 @@ class Recording(PlatformComponent):
         )
 
     @property
-    @platform_attribute
     @ServiceHubCall
-    def value_shift_initial(self) -> int:
-        """The initial `Recording.value_shift` that is calculated by the platform based
-        on the `Recording.recording_duration` to reliably prevent value overflows on the
-        platform. It corresponds to the value shift when `Recording.value_shift_offset`
-        is set to zero.
-
-        Changing the recording duration will automatically adapt the value of the
-        initial value shift.
-        """
-        return self._stub.GetValueShiftInitial(self._component).value
+    def value_factor(self) -> int:
+        return 2**self.value_shift
 
     @property
     @platform_attribute
     @ServiceHubCall
-    def value_shift_offset(self) -> int:
-        """How much the actual `Recording.value_shift` is smaller than the calculated
-        `Recording.value_shift_initial`.
-
-        Increasing this offset by 1 will increase the digital signal values by a factor
-        of two. Thereby, one can improve signal quality by efficiently using the
-        available 16bit to store result values.
-
-        However, offsets larger than zero can lead to a value overflow if the input
-        signal is already strong and the offset leads to the situation where the result
-        values exceed the valid 16bit range.
-
-        For more details on the technical details, refer to `Recording.value_shift`.
+    def expected_highest_signal_amplitude(self) -> int:
         """
-        return self._stub.GetValueShiftOffset(self._component).value
+        Return the highest amplitude that the recording module expects in ADC units.
+        By default, this is `2 ** 15 - 1`.
+        Decreasing this value from its initial may increase the signal quality
+        as there might be fewer bits that are cut when evaluating the input signal.
+        """
+        return self._stub.GetExpectedHighestSignalAmplitude(self._component).value
 
-    @value_shift_offset.setter
+    @expected_highest_signal_amplitude.setter
     @ServiceHubCall
-    def value_shift_offset(self, offset: int):
-        self._stub.SetValueShiftOffset(
-            proto.ValueShiftOffset(index=self._component, value=offset)
+    def expected_highest_signal_amplitude(self, amplitude: int):
+        self._stub.SetExpectedHighestSignalAmplitude(
+            dt.IndexedInt(index=self._component, value=abs(amplitude))
         )
 
     @property
@@ -498,7 +483,7 @@ class Recording(PlatformComponent):
     @property
     @platform_attribute
     @ServiceHubCall
-    def internal_frequency(self):
+    def internal_frequency(self) -> float:
         """The frequency in Hz of the internal reference oscillator. It is used for the
         digital down-conversion of the input signal.
 
@@ -511,7 +496,7 @@ class Recording(PlatformComponent):
 
     @internal_frequency.setter
     @ServiceHubCall
-    def internal_frequency(self, frequency):
+    def internal_frequency(self, frequency: float):
         self._stub.SetInternalFrequency(
             proto.Frequency(index=self._component, value=frequency)
         )
@@ -519,7 +504,7 @@ class Recording(PlatformComponent):
     @property
     @platform_attribute
     @ServiceHubCall
-    def phase_offset(self):
+    def phase_offset(self) -> float:
         """The phase offset in radian of the internal reference oscillator.
 
         It can be adapted to rotate the down-converted signal in the I/Q plane to a
@@ -529,7 +514,7 @@ class Recording(PlatformComponent):
 
     @phase_offset.setter
     @ServiceHubCall
-    def phase_offset(self, phase_offset):
+    def phase_offset(self, phase_offset: float):
         self._stub.SetInternalPhaseOffset(
             proto.PhaseOffset(index=self._component, value=phase_offset)
         )
@@ -537,7 +522,7 @@ class Recording(PlatformComponent):
     @property
     @platform_attribute
     @ServiceHubCall
-    def reference_frequency(self):
+    def reference_frequency(self) -> float:
         """The reference input frequency (typically the IF readout frequency). It is
         only used when the `Recording.interferometer_mode` is active.
 
@@ -549,7 +534,7 @@ class Recording(PlatformComponent):
 
     @reference_frequency.setter
     @ServiceHubCall
-    def reference_frequency(self, reference_frequency):
+    def reference_frequency(self, reference_frequency: float):
         self._stub.SetReferenceFrequency(
             proto.Frequency(index=self._component, value=reference_frequency)
         )
@@ -557,7 +542,7 @@ class Recording(PlatformComponent):
     @property
     @platform_attribute
     @ServiceHubCall
-    def reference_delay(self):
+    def reference_delay(self) -> float:
         """The relative offset between the referance and the signal path. It is only
         used when the `Recording.interferometer_mode` is active.
 
@@ -570,7 +555,7 @@ class Recording(PlatformComponent):
 
     @reference_delay.setter
     @ServiceHubCall
-    def reference_delay(self, reference_delay):
+    def reference_delay(self, reference_delay: float):
         self._stub.SetReferenceDelay(
             proto.ReferenceDelay(index=self._component, value=reference_delay)
         )
@@ -578,7 +563,7 @@ class Recording(PlatformComponent):
     @property
     @platform_attribute
     @ServiceHubCall
-    def conditioning_matrix(self) -> Tuple[float, float, float, float]:
+    def conditioning_matrix(self) -> tuple[float, float, float, float]:
         """A matrix `CM` to condition the incoming raw IQ signal.
         Amplitude modifications and/or rotations on the IQ plane are possible.
 
@@ -600,12 +585,12 @@ class Recording(PlatformComponent):
 
         """
         matrix = self._stub.GetConditioningMatrix(self._component)
-        return (matrix.ii, matrix.iq, matrix.qi, matrix.qq)
+        return matrix.ii, matrix.iq, matrix.qi, matrix.qq
 
     @conditioning_matrix.setter
     @ServiceHubCall
     def conditioning_matrix(
-        self, matrix: Union[np.ndarray, Tuple[float, float, float, float]]
+        self, matrix: npt.NDArray[np.float64] | tuple[float, float, float, float]
     ):
         if isinstance(matrix, np.ndarray) and np.shape(matrix) == (2, 2):
             # Accept numpy matrix
@@ -625,7 +610,7 @@ class Recording(PlatformComponent):
     @property
     @platform_attribute
     @ServiceHubCall
-    def conditioning_offset(self) -> Tuple[int, int]:
+    def conditioning_offset(self) -> tuple[int, int]:
         """A vector `IQ_offs` specifying an offset that will be substracted from the
         incoming raw IQ signal to correct for a potential DC offset.
 
@@ -638,27 +623,27 @@ class Recording(PlatformComponent):
 
             IQ_out = IQ_in - IQ_offs
 
-            ( I_out )     ( I_in )     ( I_offs )
-            ( Q_out )  =  ( Q_in )  -  ( Q_offs )
+            (I_out)(I_in)(I_offs)
+            (Q_out) = (Q_in) - (Q_offs)
         """
         offset = self._stub.GetConditioningOffset(self._component)
-        return (offset.i, offset.q)
+        return offset.i, offset.q
 
     @conditioning_offset.setter
     @ServiceHubCall
-    def conditioning_offset(self, offset: Tuple[int, int]):
+    def conditioning_offset(self, offset: tuple[int, int]):
         self._stub.SetConditioningOffset(
             proto.ConditioningOffset(
                 index=self._component,
-                i=int(round(offset[0])),
-                q=int(round(offset[1])),
+                i=round(offset[0]),
+                q=round(offset[1]),
             )
         )
 
     @property
     @platform_attribute
     @ServiceHubCall
-    def state_config(self) -> Tuple[int, int, int]:
+    def state_config(self) -> tuple[int, int, int]:
         r"""The configuration for the state discrimination as triplet (a_I, a_Q, b).
 
         To distinguish between states 0 and 1, in most cases, it is sufficient to
@@ -681,11 +666,11 @@ class Recording(PlatformComponent):
         .. todo:: Ilustration of qubit state estimation
         """
         config = self._stub.GetStateConfig(self._component)
-        return (config.value_ai, config.value_aq, config.value_b)
+        return config.value_ai, config.value_aq, config.value_b
 
     @state_config.setter
     @ServiceHubCall
-    def state_config(self, state_config: Tuple[int, int, int]):
+    def state_config(self, state_config: tuple[int, int, int]):
         if len(state_config) != 3:
             raise ValueError(
                 "State configuration has to be passed as triplet (a_I, a_Q, b)!"
@@ -724,7 +709,7 @@ class Recording(PlatformComponent):
         return self.state_config[2]
 
     @ServiceHubCall
-    def get_averaged_result(self, verify: bool = True) -> Tuple[int, int]:
+    def get_averaged_result(self, verify: bool = True) -> tuple[int, int]:
         """Returns the averaged result of a previous experiment as I and Q tuple.
 
         These resemble the complex fourier coefficient of the input signal at the
@@ -753,7 +738,7 @@ class Recording(PlatformComponent):
         return result.i_value, result.q_value
 
     @ServiceHubCall
-    def get_single_result(self, verify: bool = True) -> Tuple[int, int]:
+    def get_single_result(self, verify: bool = True) -> tuple[int, int]:
         """Returns the last single result of a previous experiment as I and Q tuple.
 
         These resemble the complex fourier coefficient of the input signal at the
@@ -798,7 +783,7 @@ class Recording(PlatformComponent):
     @ServiceHubCall
     def get_result_memory(
         self, size: int = 0, verify: bool = True
-    ) -> Tuple[List[int], List[int]]:
+    ) -> tuple[list[int], list[int]]:
         """Returns the result memory containing a list of all single results obtained
         during the last experiment execution.
 
@@ -824,7 +809,7 @@ class Recording(PlatformComponent):
     @ServiceHubCall
     def get_raw_timetrace(
         self, size: int = 0, verify: bool = True
-    ) -> Tuple[List[int], List[int]]:
+    ) -> tuple[list[int], list[int]]:
         """Returns the last raw time as I/Q values trace obtained during a previous
         experiment execution.
 
@@ -850,7 +835,7 @@ class Recording(PlatformComponent):
         )
         return trace.raw_i, trace.raw_q
 
-    def get_configuration_dict(self) -> Dict[str, Any]:
+    def get_configuration_dict(self) -> dict[str, Any]:
         """Returns a dictionary containing all configuration values which will not be
         automatically overwritten for each experiments (esp. calibration values).
 
@@ -859,7 +844,7 @@ class Recording(PlatformComponent):
         """
         return {
             "value_shift": self.value_shift,
-            "value_shift_offset": self.value_shift_offset,
+            "expected_highest_signal_amplitude": self.expected_highest_signal_amplitude,
             "phase_offset": self.phase_offset,
             "reference_delay": self.reference_delay,
             "conditioning_matrix": self.conditioning_matrix,

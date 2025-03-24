@@ -15,11 +15,12 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """This file contains the  experiment description for the QiController and R5 processor,
 where manipulation waveforms are generated and loaded from R5."""
+
 import numpy as np
 
 import qiclib.packages.utility as util
-from qiclib.experiment.base import BaseExperiment
 from qiclib.coding.sequencercode import SequencerCode
+from qiclib.experiment.base import BaseExperiment
 
 # TODO improve pulsegen.c to make it able to do RabiDrag experiment
 # So fat this class only generates rectangle or gauss shape pulse from R5
@@ -67,7 +68,8 @@ class RabiR5PG(BaseExperiment):
             self.iteration_averages,
             alpha,
             len(self.durations),
-        ] + duration_list
+            *duration_list,
+        ]
 
         self.qic.taskrunner.set_param_list(parameters)
 

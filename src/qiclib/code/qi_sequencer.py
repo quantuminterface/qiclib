@@ -19,51 +19,54 @@ The lower level logic of the code generation.
 This module tracks the sequencer state at the current point (e.g. register values, variable to register mapping, etc.),
 provides helper functions to generate code for expressions and more.
 """
-from enum import Enum
-from typing import List, Union, Any, Dict, Optional, Tuple
-import warnings
 
-from qiclib.code.qi_jobs import (
-    ForRange,
-    If,
-    Parallel,
-    cQiRecording,
-    cQiSync,
-    cQiDigitalTrigger,
-    cQiPlay,
-    cQiPlayReadout,
-    QiTriggerCommand,
-    cQiPlayFlux,
-)
+from __future__ import annotations
+
+import warnings
+from enum import Enum
+from typing import Any
+
 import qiclib.packages.utility as util
-from .qi_var_definitions import (
-    QiCellProperty,
-    QiVariableSet,
-    _QiCalcBase,
-    _QiVariableBase,
-    QiExpression,
-    _QiConstValue,
-    QiCondition,
-    QiOpCond,
-    QiOp,
+from qiclib.code.qi_command import (
+    DigitalTriggerCommand,
+    ForRangeCommand,
+    IfCommand,
+    ParallelCommand,
+    PlayCommand,
+    PlayFluxCommand,
+    PlayReadoutCommand,
+    QiTriggerCommand,
+    RecordingCommand,
+    SyncCommand,
 )
-from .qi_seq_instructions import (
-    SeqLoad,
-    SeqStore,
+from qiclib.code.qi_seq_instructions import (
     SeqAwaitQubitState,
-    SequencerInstruction,
+    SeqBranch,
+    SeqEnd,
+    SeqJump,
+    SeqLoad,
+    SeqLoadUpperImm,
     SeqRegImmediateInst,
     SeqRegRegInst,
-    SeqLoadUpperImm,
-    SeqJump,
-    SeqBranch,
+    SeqStore,
+    SeqTrigger,
+    SeqTriggerWaitRegister,
+    SequencerInstruction,
     SeqWaitImm,
     SeqWaitRegister,
-    SeqTrigger,
-    SeqEnd,
-    SeqTriggerWaitRegister,
 )
-from .qi_util import _get_for_range_iterations
+from qiclib.code.qi_util import _get_for_range_iterations
+from qiclib.code.qi_var_definitions import (
+    QiCellProperty,
+    QiCondition,
+    QiExpression,
+    QiOp,
+    QiOpCond,
+    QiVariableSet,
+    _QiCalcBase,
+    _QiConstValue,
+    _QiVariableBase,
+)
 
 
 class _Register:
@@ -104,7 +107,7 @@ class _Register:
         self.value = ~val1
 
     # Dictionary used to receive function from input QiOp
-    eval_operation = {
+    eval_operation = {  # noqa: RUF012
         QiOp.PLUS: addition,
         QiOp.MINUS: subtraction,
         QiOp.MULT: multiplication,
@@ -159,7 +162,7 @@ class ForRangeEntry:
         self.end_addr = 0
         self.iterations = 0
         self.aggregate_iterations = 0
-        self.contained_entries: List[ForRangeEntry] = []
+        self.contained_entries: list[ForRangeEntry] = []
 
     def _calc_aggregate(self):
         """Calculates the number of loops contained inside, considering nested entries, for later use at progress bar."""
@@ -243,19 +246,19 @@ class Sequencer:
     RECORDING_MODULE_DELAY_CYCLES = 1
     CHOKE_PULSE_INDEX = 14
 
-    def __init__(self, cell_index=None):
+    def __init__(self, cell_index: int | None = None):
         self.alu = _ALU(self)
         self.reset()
         self.cell_index = cell_index
 
-    def reset(self):
-        self._register_stack: List[_Register] = []
-        self.instruction_list: List[SequencerInstruction] = []
+    def reset(self) -> None:
+        self._register_stack: list[_Register] = []
+        self.instruction_list: list[SequencerInstruction] = []
         self._prog_cycles = _ProgramCycles()
-        self._var_reg_dict: Dict[Any, _Register] = {}
+        self._var_reg_dict: dict[Any, _Register] = {}
         self._trigger_mods = _TriggerModules()
-        self._for_range_list = []
-        self._for_range_stack: List[ForRangeEntry] = []
+        self._for_range_list: list[ForRangeEntry] = []
+        self._for_range_stack: list[ForRangeEntry] = []
 
         # register 0 always contains 0, so is not in stack
         self.reg0 = _Register(0)
@@ -263,11 +266,8 @@ class Sequencer:
             self._register_stack.append(_Register(x))
 
     def print_assembler(self):
-        pc = 0
-        for instruction in self.instruction_list:
-            print(str(pc) + "# ", end="")
-            print(instruction)
-            pc += 1
+        for pc, instruction in enumerate(self.instruction_list):
+            print(f"{pc}# {instruction}")
 
     @property
     def prog_cycles(self):
@@ -311,7 +311,7 @@ class Sequencer:
 
         return reg
 
-    def get_var_value(self, var) -> Union[int, float, None]:
+    def get_var_value(self, var) -> int | float | None:
         return self.get_var_register(var).get_value()
 
     def request_register(self) -> _Register:
@@ -319,15 +319,10 @@ class Sequencer:
         try:
             return self._register_stack.pop()
         except IndexError as e:
-            print(
-                "Not enough registers available, sequencer "
-                + str(self)
-                + " error: "
-                + str(e)
-            )
+            print(f"Not enough registers available, sequencer {self} error {e}")
             raise
 
-    def get_cycles_from_length(self, length) -> Union[_Register, int]:
+    def get_cycles_from_length(self, length) -> _Register | int:
         """If length is QiVariable, return _Register, else return numbers of cycles ceiled"""
         from .qi_var_definitions import _QiVariableBase
 
@@ -336,7 +331,7 @@ class Sequencer:
         elif isinstance(length, int):
             length = float(length)
 
-        return util.conv_time_to_cycles(length, "ceil")
+        return util.conv_time_to_cycles(length, mode="ceil")
 
     def release_register(self, reg: _Register):
         """Returns register to stack; Raises exception when register is already in stack, or addressing is faulty.
@@ -374,7 +369,7 @@ class Sequencer:
         """Copies value of src_reg to dst_reg."""
         self.add_calculation(src_reg, QiOp.PLUS, 0, dst_reg)
 
-    def get_upper_immediate_value(self, value: SequencerInstruction.imm_type):
+    def get_upper_immediate_value(self, value: int):
         """If bit 11 of lower value is 1, ADDI command sign extends the value. To account for that, sign extend lower 12 bits
         and subtract from upper 20 bits."""
         sign_extended_lower = (
@@ -383,7 +378,7 @@ class Sequencer:
         return (value - sign_extended_lower) & 0xFFFFF000
 
     def immediate_to_register(
-        self, val: SequencerInstruction.imm_type, dst_reg: Optional[_Register] = None
+        self, val: int, dst_reg: _Register | None = None
     ) -> _Register:
         """Loads immediate to dst_reg.
         If dst_reg is not defined a new register is used to save val to.
@@ -404,19 +399,20 @@ class Sequencer:
         else:
             upper_immediate = self.get_upper_immediate_value(val)
             self.add_instruction_to_list(SeqLoadUpperImm(dst_reg.adr, upper_immediate))
-            self.add_instruction_to_list(
-                SeqRegImmediateInst(QiOp.PLUS, dst_reg.adr, dst_reg.adr, val)
-            )
+            if val & 0xFFF != 0:
+                self.add_instruction_to_list(
+                    SeqRegImmediateInst(QiOp.PLUS, dst_reg.adr, dst_reg.adr, val)
+                )
 
         dst_reg.update_register_value(val, QiOp.PLUS, 0)
         return dst_reg
 
     def add_calculation(
         self,
-        val1: Union[_Register, int, float],
+        val1: _Register | int | float,
         operator: QiOp,
-        val2: Union[_Register, int, float],
-        dst_reg: Optional[_Register] = None,
+        val2: _Register | int | float,
+        dst_reg: _Register | None = None,
     ) -> _Register:
         """Adds calculation command to sequencer. Depending on the values and the operation different commands are added.
         dst_reg.value is updated to reflect changes."""
@@ -449,7 +445,7 @@ class Sequencer:
         )
         return cmd
 
-    def __evaluate_qicalc_val(self, value: QiExpression) -> Union[_Register, int]:
+    def __evaluate_qicalc_val(self, value: QiExpression) -> _Register | int:
         """Return value of QiCalc-Value.
         If another QiCalc node is found, evaluate node first, then return target register of evaluated node.
         Return _Register if QiVariable is found.
@@ -459,7 +455,7 @@ class Sequencer:
             return self.add_qi_calc(value)
         elif isinstance(value, _QiVariableBase):
             return self.get_var_register(value)
-        elif isinstance(value, _QiConstValue):
+        elif isinstance(value, (_QiConstValue, QiCellProperty)):
             return value.value
         else:
             raise TypeError("Unknown type in QiCalc")
@@ -508,7 +504,7 @@ class Sequencer:
         reg2 = self.__evaluate_if_cond_val(qi_condition.val2)
 
         # invert QiCondition --> if(x == 3) --> jump over if-body when (x!=3)
-        cmd = self.add_condition(reg1, QiOpCond.invert(qi_condition.op), reg2)
+        cmd = self.add_condition(reg1, qi_condition.op.invert(), reg2)
 
         if not isinstance(qi_condition.val1, _QiVariableBase):
             self.release_register(reg1)
@@ -521,7 +517,7 @@ class Sequencer:
     def add_for_range_head(
         self,
         var: _QiVariableBase,
-        start: Union[_QiVariableBase, int],
+        start: _QiVariableBase | int,
         end_val: _Register,
         step: _QiConstValue,
     ) -> SeqBranch:
@@ -554,9 +550,9 @@ class Sequencer:
     def _wait_cycles(self, cycles: int):
         """Adds SeqWaitImmediate command to sequencer if cycles is smaller than upper immediate max value,
         else loads cycles to register and adds SeqWaitRegister command"""
-        if cycles < 0 or cycles >= (1 << 32):
+        if not (0 < cycles <= 2**32 - 1):
             raise ValueError(
-                "Wait cycles not in valid range, should be between 0 and 2^32-1!"
+                f"Wait cycles not in valid range, should be between 0 and 2^32-1 but was {cycles}!"
             )
 
         if SequencerInstruction.is_value_in_unsigned_upper_immediate(cycles):
@@ -608,14 +604,14 @@ class Sequencer:
                     f"Wait length needs to be between 0 and {maxtime:.3f}s, but was {qi_wait.length}s."
                 ) from e
 
-    def _get_length_of_trigger(self, *pulses, recording_delay) -> Union[_Register, int]:
+    def _get_length_of_trigger(self, *pulses, recording_delay) -> _Register | int:
         """Compares length of pulses and returns longest.
         If variable length is used, returns variable's register.
         If multiple different variable lengths are used raises RuntimeError
         TODO check register value, if it is smaller than other pulses play other lengths
         """
+        from .qi_command import AnyPlayCommand
         from .qi_var_definitions import _QiVariableBase
-        from .qi_jobs import _cQiPlay_base
 
         var_set = QiVariableSet()
         for pulse_cmd in pulses:
@@ -630,12 +626,12 @@ class Sequencer:
 
         wait = 0
         for pulse_cmd in pulses:
-            if isinstance(pulse_cmd, _cQiPlay_base):
+            if isinstance(pulse_cmd, AnyPlayCommand):
                 if isinstance(pulse_cmd.length, _QiVariableBase):
                     return self.get_var_register(pulse_cmd.length)
                 else:
                     wait = max(wait, pulse_cmd.length)
-            elif isinstance(pulse_cmd, cQiRecording):
+            elif isinstance(pulse_cmd, RecordingCommand):
                 length = pulse_cmd.length
                 if recording_delay:
                     length += util.conv_cycles_to_time(
@@ -683,12 +679,12 @@ class Sequencer:
 
     def add_trigger_cmd(
         self,
-        manipulation: Optional[cQiPlay] = None,
-        readout: Optional[cQiPlayReadout] = None,
-        recording: Optional[cQiRecording] = None,
-        coupling0: Optional[cQiPlayFlux] = None,
-        coupling1: Optional[cQiPlayFlux] = None,
-        digital: Optional[cQiDigitalTrigger] = None,
+        manipulation: PlayCommand | None = None,
+        readout: PlayReadoutCommand | None = None,
+        recording: RecordingCommand | None = None,
+        coupling0: PlayFluxCommand | None = None,
+        coupling1: PlayFluxCommand | None = None,
+        digital: DigitalTriggerCommand | None = None,
         recording_delay: bool = True,
         var_single_cycle: bool = False,
     ):
@@ -726,7 +722,7 @@ class Sequencer:
 
         elif (
             length > 1
-            and (recording is None or recording.toggleContinuous is None)
+            and (recording is None or recording.toggle_continuous is None)
             and not self._check_recording_state(recording)
         ):
             self._wait_cycles(
@@ -771,8 +767,8 @@ class Sequencer:
         current_fr._calc_aggregate()
 
     def _normalise_base_offset(
-        self, base: Optional[_Register], offset: int
-    ) -> Tuple[
+        self, base: _Register | None, offset: int
+    ) -> tuple[
         _Register, int, bool
     ]:  # base register, offset, whether this function requested the register and it needs to be released.
         """If an instruction (i.e. load, store) requires a base (address) register with a constant offset
@@ -808,7 +804,7 @@ class Sequencer:
     def add_store_cmd(
         self,
         value: QiExpression,
-        base: Optional[_Register],
+        base: _Register | None,
         offset: int = 0,
     ):
         """Adds store command to instruction list. If necessary it will generate additional instructions needed to perform the store.
@@ -848,8 +844,8 @@ class Sequencer:
 
     def add_load_cmd(
         self,
-        dst: Union[_QiVariableBase, _Register],
-        base: Optional[_Register],
+        dst: _QiVariableBase | _Register,
+        base: _Register | None,
         offset: int = 0,
     ):
         """Adds load command to instruction list. If necessary it will generate additional instructions needed to perform the load.
@@ -880,6 +876,7 @@ class Sequencer:
             length_in_cycles=Sequencer.LOAD_STORE_LENGTH,
             length_valid=True,
         )
+        print(f"{self.add_instruction_to_list}")
 
         if free:
             self.release_register(base_register)
@@ -890,7 +887,7 @@ class Sequencer:
 
 
 class _ALU:
-    def __init__(self, Sequencer) -> None:
+    def __init__(self, Sequencer: Sequencer) -> None:
         self.seq = Sequencer
 
     def _large_immediate_operation(
@@ -898,7 +895,7 @@ class _ALU:
         operation,
         dst_reg: _Register,
         reg: _Register,
-        immediate: SequencerInstruction.imm_type,
+        immediate: int,
         length_in_cycles=1,
     ):
         """Used by commutative_operation/non_commutative_operation to load large immediate values to a Register before performing the operation.
@@ -914,8 +911,8 @@ class _ALU:
         self,
         operation,
         dst_reg: _Register,
-        val1: Union[_Register, int, float],
-        val2: Union[_Register, int, float],
+        val1: _Register | int | float,
+        val2: _Register | int | float,
     ):
         """Checks if val1 is of type _Register, if not it switches val1 and val2.
         After switching, val2 is int/float or _Register. In the case of int/float it is checked if an immediate command can be
@@ -941,8 +938,8 @@ class _ALU:
         self,
         operation,
         dst_reg: _Register,
-        val1: Union[_Register, int, float],
-        val2: Union[_Register, int, float],
+        val1: _Register | int | float,
+        val2: _Register | int | float,
     ):
         """Checks if val1 is of type _Register and tries to use immediate command, else register command is used."""
         if isinstance(val1, _Register):
@@ -1025,7 +1022,7 @@ class _ALU:
         self.commutative_operation(QiOp.XOR, dst_reg, val1, -1)
 
     # Dictionary used to receive function from input QiOp
-    eval_operation = {
+    eval_operation = {  # noqa: RUF012
         QiOp.PLUS: addition,
         QiOp.MINUS: subtraction,
         QiOp.MULT: multiplication,
@@ -1067,17 +1064,17 @@ class _ProgramCycles:
             if type is None:
                 assert cmd is not None
 
-                if isinstance(cmd, If):
+                if isinstance(cmd, IfCommand):
                     type = _SyncPointType.BEFORE_IF_ELSE
-                elif isinstance(cmd, Parallel):
+                elif isinstance(cmd, ParallelCommand):
                     type = _SyncPointType.BEFORE_PARALLEL
-                elif isinstance(cmd, cQiSync):
+                elif isinstance(cmd, SyncCommand):
                     type = _SyncPointType.SYNC_COMMAND
                 else:
                     raise RuntimeError("Can not infer _SyncPointType from command.")
             elif cmd is None:
                 assert type == _SyncPointType.PROGRAM_START
-            elif isinstance(cmd, ForRange):
+            elif isinstance(cmd, ForRangeCommand):
                 assert type is not None and type in [
                     _SyncPointType.BEFORE_FOR_RANGE,
                     _SyncPointType.AFTER_FOR_RANGE_ITERATION,
@@ -1106,7 +1103,7 @@ class _ProgramCycles:
         self.cycles = 0
         self.valid = True
 
-    def set_synchronized(self, sync_point: "_ProgramCycles.SyncPoint"):
+    def set_synchronized(self, sync_point: _ProgramCycles.SyncPoint):
         self.last_sync_point = sync_point
         self.cycles = 0
         self.valid = True
@@ -1125,10 +1122,10 @@ class _RecordingTrigger(Enum):
     CONTINUOUS = 3
 
     @staticmethod
-    def from_recording(recording: Optional[cQiRecording]):
+    def from_recording(recording: RecordingCommand | None):
         if recording is None:
             return _RecordingTrigger.NONE.value
-        if recording.toggleContinuous is True:
+        if recording.toggle_continuous is True:
             # CONTINUOUS toggles (second trigger turns continuous recoding off)
             return _RecordingTrigger.CONTINUOUS.value
         if recording.save_to is None:
@@ -1137,7 +1134,7 @@ class _RecordingTrigger(Enum):
 
 
 def _get_trigger_index(
-    pulse: Optional[QiTriggerCommand], active_trigger: Union[bool, int]
+    pulse: QiTriggerCommand | None, active_trigger: bool | int
 ) -> int:
     if pulse is None and active_trigger is False:
         return 0
@@ -1160,8 +1157,8 @@ class _TriggerModules:
     def __init__(self) -> None:
         self.reset()
 
-    def reset(self):
-        self._trigger_modules_active: List[Union[bool, int]] = [False] * 6
+    def reset(self) -> None:
+        self._trigger_modules_active: list[bool | int] = [False] * 6
 
     @property
     def is_pulse_active(self) -> bool:
@@ -1170,12 +1167,12 @@ class _TriggerModules:
 
     def set_active(
         self,
-        readout: Optional[Any] = None,
-        rec: Optional[Any] = None,
-        manipulation: Optional[Any] = None,
-        coupling0: Optional[Any] = None,
-        coupling1: Optional[Any] = None,
-        digital: Optional[Any] = None,
+        readout: Any | None = None,
+        rec: Any | None = None,
+        manipulation: Any | None = None,
+        coupling0: Any | None = None,
+        coupling1: Any | None = None,
+        digital: Any | None = None,
     ):
         """Marks pulse generators of defined pulses as active/running"""
         self._trigger_modules_active[_TriggerModules.READOUT] = readout is not None
@@ -1189,13 +1186,13 @@ class _TriggerModules:
 
     def get_trigger_val(
         self,
-        readout: Optional[cQiPlayReadout] = None,
-        rec: Optional[cQiRecording] = None,
-        manipulation: Optional[cQiPlay] = None,
-        coupling0: Optional[cQiPlay] = None,
-        coupling1: Optional[cQiPlay] = None,
-        digital: Optional[cQiDigitalTrigger] = None,
-    ) -> List[int]:
+        readout: PlayReadoutCommand | None = None,
+        rec: RecordingCommand | None = None,
+        manipulation: PlayCommand | None = None,
+        coupling0: PlayCommand | None = None,
+        coupling1: PlayCommand | None = None,
+        digital: DigitalTriggerCommand | None = None,
+    ) -> list[int]:
         """Returns trigger values for defined pulses.
         If a pulse is not defined, but its module is marked active/running,
         the index of the choke pulse is returned.

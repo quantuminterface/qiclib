@@ -20,17 +20,20 @@ This module contains the type infrastructure and error reporting logic.
 The basic typechecking idea is described in the documentation for `_TypeConstraint`
 """
 
+from __future__ import annotations
+
+import warnings
 from abc import abstractmethod
 from enum import Enum
-from typing import Tuple, List, TYPE_CHECKING, Dict
-import warnings
+from typing import TYPE_CHECKING
+
+from qiclib.packages.constants import CONTROLLER_CYCLE_TIME
 
 from .qi_visitor import QiJobVisitor
 
-# Weird hack I found on the internet so I can use type annotations without circular imports.
-# https://www.stefaanlippens.net/circular-imports-type-hints-python.html
 if TYPE_CHECKING:
-    from .qi_var_definitions import QiOpCond, QiOp, QiExpression
+    from .qi_command import ForRangeCommand
+    from .qi_var_definitions import QiExpression, QiOp, QiOpCond
 
 
 class QiType(Enum):
@@ -49,6 +52,9 @@ class QiType(Enum):
     """
     Frequency values can be used in the Play/PlayReadout commands and, like TIME, are specified using floats.
     """
+    PHASE = 5
+
+    AMPLITUDE = 6
 
 
 class _TypeConstraintReason:
@@ -56,13 +62,13 @@ class _TypeConstraintReason:
 
 
 class _TypeConstraintReasonQiCalc(_TypeConstraintReason):
-    def __init__(self, op: "QiOp", result: "QiExpression"):
+    def __init__(self, op: QiOp, result: QiExpression):
         self.op = op
         self.result = result
 
 
 class _TypeConstraintReasonQiCondition(_TypeConstraintReason):
-    def __init__(self, op: "QiOpCond"):
+    def __init__(self, op: QiOpCond):
         self.op = op
 
 
@@ -103,6 +109,8 @@ class _TypeDefiningUse(_TypeFact, Enum):
     WAIT_COMMAND = 5
     RECORDING_OFFSET_EXPRESSION = 6
     PULSE_FREQUENCY = 7
+    PULSE_PHASE = 8
+    PULSE_AMPLITUDE = 9
 
     def to_error_message(self) -> str:
         return {
@@ -114,6 +122,8 @@ class _TypeDefiningUse(_TypeFact, Enum):
             _TypeDefiningUse.WAIT_COMMAND: "is used as length in wait command",
             _TypeDefiningUse.RECORDING_OFFSET_EXPRESSION: "is used as an recording offset",
             _TypeDefiningUse.PULSE_FREQUENCY: "is used as pulse frequency.",
+            _TypeDefiningUse.PULSE_PHASE: "is used as pulse phase.",
+            _TypeDefiningUse.PULSE_AMPLITUDE: "is used as pulse amplitude.",
         }[self]
 
 
@@ -133,7 +143,7 @@ class _TypeConstraint(_TypeFact):
     """A type constraint represents an implication.
     If a (or multiple) QiExpression has a certain QiType, then a different QiExpression must have the specified type.
     Using this construct we formulate all typing rules in qicode.
-    For example we can express that two expressions A and B must have the same type, by specifing that for all (four) types T:
+    For example we can express that two expressions A and B must have the same type, by specifying that for all (four) types T:
     1. If A has type T then B has to have type T.
     2. If B has type T then A has to have type T.
 
@@ -147,8 +157,8 @@ class _TypeConstraint(_TypeFact):
 
     def __init__(
         self,
-        condition: List[Tuple["QiExpression", QiType]],
-        conclusion: Tuple["QiExpression", QiType],
+        condition: list[tuple[QiExpression, QiType]],
+        conclusion: tuple[QiExpression, QiType],
         reason: _TypeConstraintReason,
     ):
         self.condition = condition
@@ -217,20 +227,20 @@ class _TypeConstraint(_TypeFact):
             )
 
         elif isinstance(self.reason, _TypeConstraintReasonQiCommand):
-            from .qi_jobs import cQiAssign, ForRange
+            from .qi_command import AssignCommand, ForRangeCommand
 
             cmd = self.reason.command
 
             assert len(self.condition) == 1
             cond = self.condition[0]
 
-            if cmd == cQiAssign:
+            if cmd == AssignCommand:
                 return (
                     f"is used in Assign command with type {cond[1]}\n"
                     + f"(because {cond[0]} {cond[0]._type_info.type_reason.to_error_message()})"
                 )
 
-            elif cmd == ForRange:
+            elif cmd == ForRangeCommand:
                 return (
                     f"is used in ForRange over type {cond[1]}\n"
                     + f"(because {cond[0]} {cond[0]._type_info.type_reason.to_error_message()})"
@@ -246,13 +256,13 @@ class _TypeConstraint(_TypeFact):
 
 
 class _TypeInformation:
-    def __init__(self, expr: "QiExpression"):
+    def __init__(self, expr: QiExpression):
         self.expression = expr
         self.type = QiType.UNKNOWN
         self.type_reason: _TypeFact = None
 
-        self.constraints: List[_TypeConstraint] = []
-        self.illegal_types: Dict[QiType, _IllegalTypeReason] = {}
+        self.constraints: list[_TypeConstraint] = []
+        self.illegal_types: dict[QiType, _IllegalTypeReason] = {}
 
     def add_constraint(self, constraint: _TypeConstraint):
         """Adds a type constraint to this expression.
@@ -307,7 +317,7 @@ class _TypeInformation:
 
 
 def add_qi_calc_constraints(
-    op: "QiOp", lhs: "QiExpression", rhs: "QiExpression", res: "QiExpression"
+    op: QiOp, lhs: QiExpression, rhs: QiExpression | None, res: QiExpression
 ):
     """Adds type constraints for a qicalc operation to the corresponding expressions."""
 
@@ -330,10 +340,14 @@ def add_qi_calc_constraints(
     if op == QiOp.PLUS:
         _add_equal_constraints(QiType.TIME, reason, rhs, lhs, res)
         _add_equal_constraints(QiType.FREQUENCY, reason, rhs, lhs, res)
+        _add_equal_constraints(QiType.PHASE, reason, rhs, lhs, res)
+        _add_equal_constraints(QiType.AMPLITUDE, reason, rhs, lhs, res)
 
     if op == QiOp.MULT:
         _add_scalar_multiplication_rules(QiType.TIME, lhs, rhs, res, reason)
         _add_scalar_multiplication_rules(QiType.FREQUENCY, lhs, rhs, res, reason)
+        _add_scalar_multiplication_rules(QiType.PHASE, lhs, rhs, res, reason)
+        _add_scalar_multiplication_rules(QiType.AMPLITUDE, lhs, rhs, res, reason)
 
     if op in [QiOp.LSH, QiOp.RSH]:
         rhs._type_info.set_type(QiType.NORMAL, _TypeDefiningUse.SHIFT_EXPRESSION)
@@ -341,14 +355,16 @@ def add_qi_calc_constraints(
         _add_equal_constraints(QiType.NORMAL, reason, lhs, res)
         _add_equal_constraints(QiType.TIME, reason, lhs, res)
         _add_equal_constraints(QiType.FREQUENCY, reason, lhs, res)
+        _add_equal_constraints(QiType.PHASE, reason, lhs, res)
+        _add_equal_constraints(QiType.AMPLITUDE, reason, lhs, res)
 
 
 def _add_scalar_multiplication_rules(
-    type: "QiType",
-    lhs: "QiExpression",
-    rhs: "QiExpression",
-    res: "QiExpression",
-    reason: "_TypeConstraintReason",
+    type: QiType,
+    lhs: QiExpression,
+    rhs: QiExpression,
+    res: QiExpression,
+    reason: _TypeConstraintReason,
 ):
     _add_implies_constraint([(lhs, type)], (rhs, QiType.NORMAL), reason)
     _add_implies_constraint([(lhs, type)], (res, type), reason)
@@ -365,9 +381,7 @@ def _add_scalar_multiplication_rules(
     _add_implies_constraint([(res, QiType.NORMAL)], (rhs, QiType.NORMAL), reason)
 
 
-def add_qi_condition_constraints(
-    op: "QiOpCond", lhs: "QiExpression", rhs: "QiExpression"
-):
+def add_qi_condition_constraints(op: QiOpCond, lhs: QiExpression, rhs: QiExpression):
     """Adds type constraints for a qicondition to the corresponding expressions."""
     from .qi_var_definitions import QiOpCond
 
@@ -381,7 +395,7 @@ def add_qi_condition_constraints(
 
 
 def _add_equal_constraints(
-    type: QiType, reason: _TypeConstraintReason, *expressions: "QiExpression"
+    type: QiType, reason: _TypeConstraintReason, *expressions: QiExpression
 ):
     """Helper function to add equality constraints."""
     assert len(expressions) > 1
@@ -395,8 +409,8 @@ def _add_equal_constraints(
 
 
 def _add_implies_constraint(
-    condition: List[Tuple["QiExpression", QiType]],
-    conclusion: Tuple["QiExpression", QiType],
+    condition: list[tuple[QiExpression, QiType]],
+    conclusion: tuple[QiExpression, QiType],
     reason: _TypeConstraintReason,
 ):
     """Simple helper function to add constraints to all necessary QiExpressions."""
@@ -406,7 +420,7 @@ def _add_implies_constraint(
 
 
 class QiTypeFallbackVisitor(QiJobVisitor):
-    """Sets the the fallback type to NORMAL for _QiConstValue if they weren't given a type during QiJob construction.
+    """Sets the fallback type to NORMAL for _QiConstValue if they weren't given a type during QiJob construction.
     This is important for qicode like the following:
 
     .. code-block:: python
@@ -419,17 +433,13 @@ class QiTypeFallbackVisitor(QiJobVisitor):
     after job construction. (see QiJob __exit__ method).
     """
 
-    def visit_for_range(self, for_range_cm):
-        from .qi_var_definitions import QiType
-
+    def visit_for_range(self, for_range_cm: ForRangeCommand):
         if for_range_cm.var.type == QiType.UNKNOWN:
             for_range_cm.var._type_info.set_type(QiType.NORMAL, _TypeFallback.INT)
 
         super().visit_for_range(for_range_cm)
 
     def visit_constant(self, const):
-        from .qi_var_definitions import QiType
-
         if const.type == QiType.UNKNOWN:
             if isinstance(const._given_value, float):
                 const._type_info.set_type(QiType.TIME, _TypeFallback.FLOAT)
@@ -444,16 +454,8 @@ class QiPostTypecheckVisitor(QiJobVisitor):
     certainty whether they iterate over NORMAL or TIME values after the QiTypeFallbackVisitor has run.
     """
 
-    def __init__(self):
-        pass
-
-    def visit_for_range(self, for_range_cm):
-        from qiclib.packages.constants import CONTROLLER_CYCLE_TIME
-        from .qi_var_definitions import _QiConstValue, QiType
-        from .qi_jobs import ForRange
-        import numpy as np
-
-        for_range_cm: ForRange = for_range_cm
+    def visit_for_range(self, for_range_cm: ForRangeCommand):
+        from .qi_var_definitions import _QiConstValue
 
         for_range_cm.var.accept(self)
         for_range_cm.start.accept(self)
@@ -473,16 +475,20 @@ class QiPostTypecheckVisitor(QiJobVisitor):
 
             # round to 11 decimals, if result is CONTROLLER_CYCLE_TIME then float modulo probably failed
             if (
-                round(np.mod(for_range_cm.step._given_value, CONTROLLER_CYCLE_TIME), 11)
+                round(
+                    abs(for_range_cm.step._given_value) % CONTROLLER_CYCLE_TIME,
+                    11,
+                )
                 != 0
                 and round(
-                    np.mod(for_range_cm.step._given_value, CONTROLLER_CYCLE_TIME), 11
+                    abs(for_range_cm.step._given_value) % CONTROLLER_CYCLE_TIME,
+                    11,
                 )
                 != CONTROLLER_CYCLE_TIME
             ):
                 raise RuntimeError(
                     f"When using QiTimeVariables define step size as multiple of {CONTROLLER_CYCLE_TIME*1e9:.3g} ns."
-                    f" (It is currently off by {np.mod(for_range_cm.step._given_value, CONTROLLER_CYCLE_TIME)*1e9:.3g} ns.)"
+                    f" (It is currently off by {(for_range_cm.step._given_value % CONTROLLER_CYCLE_TIME)*1e9:.3g} ns.)"
                 )
         elif (
             for_range_cm.var.type == QiType.FREQUENCY
@@ -496,20 +502,14 @@ class QiPostTypecheckVisitor(QiJobVisitor):
         super().visit_assign_command(assign_cmd)
 
     def visit_constant(self, const):
-        from .qi_var_definitions import QiType
-
         if const.type == QiType.UNKNOWN:
             raise TypeError(f"Could not infer type of {const}.")
 
     def visit_variable(self, var):
-        from .qi_var_definitions import QiType
-
         if var.type == QiType.UNKNOWN:
             raise TypeError(f"Could not infer type of {var}.")
 
     def visit_calc(self, calc):
-        from .qi_var_definitions import QiType
-
         super().visit_calc(calc)
         if calc.type == QiType.UNKNOWN:
             raise TypeError(f"Could not infer type of {calc}.")

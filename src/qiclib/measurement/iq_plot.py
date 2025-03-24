@@ -14,24 +14,24 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """File containing the IQPlot class"""
+
+from __future__ import annotations
+
 import os
 import pickle
 
-import numpy
-import matplotlib.pyplot as plt
-import matplotlib.colors as pltcol
-
-from ipywidgets import interact
 import ipywidgets as widgets
-from typing import Tuple, Optional
+import matplotlib.colors as pltcol
+import matplotlib.pyplot as plt
+import numpy
+from ipywidgets import interact
 
 from qiclib.measurement.iq_fit import IQFit
-
-from qiclib.packages.qkit_polyfill import DateTimeGenerator, QKIT_ENABLED
+from qiclib.packages.qkit_polyfill import QKIT_ENABLED, DateTimeGenerator
 
 
 class IQPlot:
-    colorlist = ["b", "r", "g", "c", "m", "k"]
+    colorlist: tuple[str] = ("b", "r", "g", "c", "m", "k")
 
     def __init__(self, iq_data=None):
         """
@@ -257,7 +257,7 @@ class IQPlot:
                     "-r",
                 )
 
-        xs, ys, _ = list(zip(*lists))[0]
+        xs, ys, _ = next(zip(*lists))
 
         def single_plot(fig, ax):
             hist, _, _ = self._plot_single(
@@ -334,7 +334,7 @@ class IQPlot:
         else:
             limit_range = [[limits[0], limits[1]], [limits[2], limits[3]]]
 
-        xs, ys, _ = list(zip(*lists))[0]
+        xs, ys, _ = next(zip(*lists))
 
         # Keep correct aspect ratio
         bins_r = bins * means[1] * (limits[1] - limits[0]) / (limits[3] - limits[2])
@@ -553,12 +553,12 @@ class IQPlot:
         data_lists,
         rows: int,
         cols: int,
-        limits: Tuple[float, float, float, float],
+        limits: tuple[float, float, float, float],
         xlabel: str,
         ylabel: str,
         aspect: float = 1.0,
         cmap: str = "jet",
-        scaling: Optional[str] = None,
+        scaling: str | None = None,
         cmin: int = 1,
         bins: int = 400,
         plot_extra=None,

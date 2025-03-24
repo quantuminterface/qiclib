@@ -14,9 +14,10 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """This file contains the rabi experiment description for the QiController."""
-import warnings
-import qiclib.packages.utility as util
 
+import warnings
+
+import qiclib.packages.utility as util
 from qiclib.experiment.base import BaseExperiment
 
 

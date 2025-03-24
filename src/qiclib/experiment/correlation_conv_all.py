@@ -14,10 +14,11 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """This file contains the IQCloud experiment description for the QiController."""
+
 import numpy as np
 
-from qiclib.experiment.gx_correlation_base import GxCorrelationBase, TaskrunnerReadout
 import qiclib.packages.utility as util
+from qiclib.experiment.gx_correlation_base import GxCorrelationBase, TaskrunnerReadout
 from qiclib.hardware.taskrunner import TaskRunner
 
 

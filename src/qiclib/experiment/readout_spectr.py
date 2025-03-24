@@ -14,11 +14,13 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """Readout traces averaging done at the R5 rpocessor"""
+
 import warnings
+
 import numpy as np
 
-from qiclib.experiment.base import BaseExperiment
 import qiclib.packages.utility as util
+from qiclib.experiment.base import BaseExperiment
 
 
 class IQFtReadout(BaseExperiment):

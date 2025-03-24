@@ -14,10 +14,11 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """Collection of common experiments written in the QiCode language."""
+
 import numpy as np
 
 # pylint: disable=unused-wildcard-import, wildcard-import
-from ...code import *
+from qiclib.code import *
 
 ###
 ### Some useful gate descriptions

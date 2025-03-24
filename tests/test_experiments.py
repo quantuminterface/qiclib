@@ -13,26 +13,27 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-import unittest
 import warnings
+
+import mocks
+import pytest
+from mocks import (
+    digital_trigger,
+    pimc,
+    pulse_gen,
+    recording,
+    rfdc,
+    sequencer,
+    servicehub_control,
+    taskrunner,
+    unit_cell,
+)
+from numpy.testing import assert_array_equal
 
 from qiclib import QiController
 from qiclib.code import *
-
-from numpy.testing import assert_array_equal
-
-import mocks
-from mocks import (
-    pimc,
-    rfdc,
-    unit_cell,
-    sequencer,
-    servicehub_control,
-    recording,
-    pulse_gen,
-    taskrunner,
-    digital_trigger,
-)
+from qiclib.experiment.qicode.base import _TaskrunnerSettings
+from qiclib.hardware.taskrunner import TaskRunner
 
 
 @mocks.patch(
@@ -46,7 +47,7 @@ from mocks import (
     taskrunner,
     digital_trigger,
 )
-class TestExperiments(unittest.TestCase):
+class TestExperiments:
     def test_ExperimentReadout(self):
         controller = QiController("IP")
         with QiJob() as job:
@@ -57,8 +58,8 @@ class TestExperiments(unittest.TestCase):
         assert_array_equal(amp, [[1.0], [2.0], [3.0]])
         assert_array_equal(pha, [[4.0], [5.0], [6.0]])
 
-    @unittest.skip(
-        "ignoring the error for now as it will become obsolete when the compiler gets pushed to the platform"
+    @pytest.mark.skip(
+        reason="ignoring the error for now as it will become obsolete when the compiler gets pushed to the platform"
     )
     def test_does_not_raise_warning_when_using_a_variable_frequency(self):
         controller = QiController("IP")
@@ -84,7 +85,18 @@ class TestExperiments(unittest.TestCase):
         experiment = job.create_experiment(controller)
         print(experiment.qic.readout.internal_frequency)
         experiment.run()
-        with self.assertWarnsRegex(
-            UserWarning, "Readout pulses without frequency given"
-        ):
+        with pytest.warns(UserWarning, match="Readout pulses without frequency given"):
             experiment.run()
+
+
+def test_taskrunner_setting_updates():
+    settings = _TaskrunnerSettings(
+        "file.c", "Task", (1, 2), TaskRunner.DataMode.INT32, None
+    )
+    updated_settings = _TaskrunnerSettings(
+        "new_file.c", "Task", None, TaskRunner.DataMode.UINT8, None
+    )
+    settings.update(updated_settings)
+    assert settings == _TaskrunnerSettings(
+        "new_file.c", "Task", (1, 2), TaskRunner.DataMode.UINT8, None
+    )

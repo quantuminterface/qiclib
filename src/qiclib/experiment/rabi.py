@@ -15,7 +15,9 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """This file contains the rabi experiment description for the QiController and R5 processor.
 Iteration averaging is done on R5"""
+
 import warnings
+
 import numpy as np
 
 import qiclib.packages.utility as util
@@ -23,7 +25,7 @@ from qiclib.experiment.base import BaseExperiment
 
 
 class Rabi(BaseExperiment):
-    """Rabi experiment driving the qubit between the states \|0> and \|1>.
+    r"""Rabi experiment driving the qubit between the states \|0> and \|1>.
 
     This experiment outputs pulses at the qubit frequency of
     different duration and measures in which state the qubit is. Can be

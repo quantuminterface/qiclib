@@ -15,7 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 """
-This module contains the algorithm to insert cQiMemStore instructions into a QiJob,
+This module contains the algorithm to insert MemStoreCommand instructions into a QiJob,
 to ensure that the QiCellCommand parameters are correctly set in the recording module.
 
 We define the term 'memory parameter' to mean a parameter of a QiCellCommand that is not
@@ -25,7 +25,7 @@ The challenge lies in figuring out where to insert these store instructions, wit
 increasing performance overhead unnecessarily.
 
 The following is a description of the used algorithm, specialized for the recording offset
-memory parameter part of the cQiRecording command, but generalizes to the other memory parameters.
+memory parameter part of the RecordingCommand command, but generalizes to the other memory parameters.
 
 The entry point of the algorithm is in `insert_recording_offset_store_commands`.
 It performs roughly the following steps:
@@ -40,14 +40,14 @@ It performs roughly the following steps:
    (see AvailableMemoryParameterAnalysis)
 
 3. On every edge in the CFG where a distinct offset is anticipated but not available we
-   insert a cQiMemStore instruction in the corresponding place in the QiJob.commands.
+   insert a MemStoreCommand instruction in the corresponding place in the QiJob.commands.
 
 (This algorithm is a customized Partial Redundancy Elimination (PRE). The idea is we insert a store
 instruction before every Recording instruction and then use PRE to eliminate as many as we can.)
 
 Notes:
     Before we start the main algorithm we insert so called 'pseudo store instructions'.
-    These are cQiMemStore commands inserted into the CFG (but NOT into the QiJob) and simulate
+    These are MemStoreCommand commands inserted into the CFG (but NOT into the QiJob) and simulate
     the unrolling of loops for one iteration.
     Otherwise our analysis thinks that loops might never enter the body once which will lead to
     our algorithm, not placing the store instruction before the loop in the following code:
@@ -55,7 +55,7 @@ Notes:
     .. code-block:: python
 
         ForRange(i, 0, 100):
-            cQiMemStore(addr, 12e-9)                    <- Instruction would be placed here
+            MemStoreCommand(addr, 12e-9)                    <- Instruction would be placed here
             Recording(cells[0], length, offset=12e-9)
 
     In the event, that the loop never executes the body there would be a unecessary
@@ -81,7 +81,7 @@ Notes:
     .. code-block:: python
 
         Play(cells[0], QiPulse(..., frequency=20-e9))
-        cQiMemStore(addr, 40e-9)                  <- Instruction would be placed here.
+        MemStoreCommand(addr, 40e-9)                  <- Instruction would be placed here.
         Play(cells[0], QiPulse(...))
         Play(cells[0], QiPulse(..., frequency=40-e9))
 
@@ -91,35 +91,36 @@ Notes:
     This will cause step three in the above sketch of the algorithm to insert the store command after the second play command.
 """
 
+from __future__ import annotations
+
 from copy import copy
-from typing import Dict, List, Optional, Tuple, Union
+
+from qiclib.code.qi_command import (
+    AssignCommand,
+    DeclareCommand,
+    ForRangeCommand,
+    MemStoreCommand,
+    ParallelCommand,
+    PlayCommand,
+    PlayReadoutCommand,
+    RecordingCommand,
+)
 from qiclib.code.qi_dataflow import (
     _CFG,
-    _CFGNode,
     CellValues,
     DataflowVisitor,
     FlatLatticeValue,
+    _CFGNode,
     forward_dataflow,
     reverse_dataflow,
 )
-
 from qiclib.code.qi_jobs import (
-    ForRange,
-    Parallel,
     QiCell,
     QiCommand,
-    QiContextManager,
     QiJob,
-    cQiAssign,
-    cQiDeclare,
-    cQiMemStore,
-    cQiPlay,
-    cQiPlayReadout,
-    cQiRecording,
 )
-from qiclib.code.qi_pulse import QiPulse
 from qiclib.code.qi_types import QiType
-from qiclib.code.qi_var_definitions import _QiConstValue, QiCellProperty, QiExpression
+from qiclib.code.qi_var_definitions import QiCellProperty, QiExpression, _QiConstValue
 from qiclib.code.qi_visitor import QiCommandVisitor, QiExpressionVisitor
 
 
@@ -128,8 +129,8 @@ class Multiple:
 
 
 def _collect_memory_param_in_parallel_block(
-    parallel: Parallel, config: "InsertMemoryParameterConfiguration"
-) -> Dict[QiCell, Optional[QiExpression]]:
+    parallel: ParallelCommand, config: InsertMemoryParameterConfiguration
+) -> dict[QiCell, QiExpression | None]:
     """Collects uses of a memory parameter in a parallel block for every cell.
     If there are multiple different uses, we store `Multiple` in the returned dict.
     """
@@ -155,30 +156,32 @@ def _collect_memory_param_in_parallel_block(
 
 
 class AnticipatedMemoryParameterAnalysis(DataflowVisitor):
-    def __init__(self, config: "InsertMemoryParameterConfiguration"):
+    def __init__(self, config: InsertMemoryParameterConfiguration):
         super().__init__()
         self.config = config
 
-    def visit_cell_command(self, cell_cmd, input: CellValues, node):
+    def visit_cell_command(self, cell_cmd, cell_values: CellValues, node):
         mem_param = self.config.get_memory_param(cell_cmd)
         if mem_param is not IrrelevantCommand:
-            out = copy(input)
+            out = copy(cell_values)
 
             for cell in cell_cmd._relevant_cells:
                 if mem_param is None:
                     # Missing memory parameter => invalidate value so stores for subsequent
                     # memory parameters are not placed before this command.
                     out.set_cell_value(cell, FlatLatticeValue.no_const())
-                elif FlatLatticeValue.value(mem_param) != input.get_cell_value(cell):
+                elif FlatLatticeValue.value(mem_param) != cell_values.get_cell_value(
+                    cell
+                ):
                     assert isinstance(mem_param, QiExpression)
                     out.set_cell_value(cell, FlatLatticeValue.value(mem_param))
 
             return out
         else:
-            return input
+            return cell_values
 
-    def visit_parallel(self, parallel_cm, input, node):
-        assert isinstance(parallel_cm, Parallel)
+    def visit_parallel(self, parallel_cm, cell_values: CellValues, node):
+        assert isinstance(parallel_cm, ParallelCommand)
         # Check if parallel command contains multiple recording commands with different offsets.
 
         mem_param = _collect_memory_param_in_parallel_block(parallel_cm, self.config)
@@ -189,7 +192,7 @@ class AnticipatedMemoryParameterAnalysis(DataflowVisitor):
                     "Parallel Blocks with multiple Recording instructions with different offsets are not supported."
                 )
 
-        out = copy(input)
+        out = copy(cell_values)
         for cell, mem_param in mem_param.items():
             if mem_param is None:
                 out.set_cell_value(cell, FlatLatticeValue.no_const())
@@ -198,29 +201,35 @@ class AnticipatedMemoryParameterAnalysis(DataflowVisitor):
 
         return out
 
-    def visit_for_range(self, for_range_cm: ForRange, input: CellValues, node):
+    def visit_for_range(
+        self, for_range_cm: ForRangeCommand, cell_values: CellValues, node
+    ):
         var = for_range_cm.var
 
         # Kill variables that use the loop variable, because it will change in the next iteration
-        return input.invalidate_values_containing(var)
+        return cell_values.invalidate_values_containing(var)
 
-    def visit_assign_command(self, assign_cmd: cQiAssign, input: CellValues, node):
+    def visit_assign_command(
+        self, assign_cmd: AssignCommand, cell_values: CellValues, node
+    ):
         var = assign_cmd.var
 
         # Kill variables that use the assigned variable
-        return input.invalidate_values_containing(var)
+        return cell_values.invalidate_values_containing(var)
 
-    def visit_declare_command(self, declare_cmd: cQiDeclare, input: CellValues, node):
+    def visit_declare_command(
+        self, declare_cmd: DeclareCommand, cell_values: CellValues, node
+    ):
         var = declare_cmd.var
 
         # There shouldn't be any expressions which use this variable, but lets be on the safe side
         # and invalidate regardless.
-        return input.invalidate_values_containing(var)
+        return cell_values.invalidate_values_containing(var)
 
     # Needed to handle inserted store commands in cfg by _add_pseudo_store_instructions
-    def visit_mem_store_command(self, store_cmd: cQiMemStore, input, node):
+    def visit_mem_store_command(self, store_cmd: MemStoreCommand, cell_values, node):
         if store_cmd.addr == self.config.recording_module_address:
-            out = copy(input)
+            out = copy(cell_values)
 
             for cell in store_cmd._relevant_cells:
                 if store_cmd.value is None:
@@ -230,7 +239,7 @@ class AnticipatedMemoryParameterAnalysis(DataflowVisitor):
 
             return out
         else:
-            return input
+            return cell_values
 
 
 class AvailableMemoryParameterAnalysis(DataflowVisitor):
@@ -239,14 +248,14 @@ class AvailableMemoryParameterAnalysis(DataflowVisitor):
     def __init__(self, anticipated_analysis: str):
         self.anticipated_analysis = anticipated_analysis
 
-    def propagate(self, input, node):
+    def propagate(self, cell_values, node):
         """
         Propagates data flow information for this node, based on the incoming data
         and the anticipated memory param analysis.
         """
         antic = node.value_map[self.anticipated_analysis]
 
-        out = copy(input)
+        out = copy(cell_values)
 
         # Values that are anticipated are assigned immediately.
         for cell, value in antic.values.items():
@@ -255,87 +264,87 @@ class AvailableMemoryParameterAnalysis(DataflowVisitor):
 
         return out
 
-    def visit_cell_command(self, cell_cmd, input, node):
-        return self.propagate(input, node)
+    def visit_cell_command(self, cell_cmd, cell_values, node):
+        return self.propagate(cell_values, node)
 
-    def visit_context_manager(self, context_manager, input, node):
-        return self.propagate(input, node)
+    def visit_context_manager(self, context_manager, cell_values, node):
+        return self.propagate(cell_values, node)
 
-    def visit_if(self, if_cm, input, node):
-        return self.propagate(input, node)
+    def visit_if(self, if_cm, cell_values, node):
+        return self.propagate(cell_values, node)
 
-    def visit_parallel(self, parallel_cm, input, node):
-        return self.propagate(input, node)
+    def visit_parallel(self, parallel_cm, cell_values, node):
+        return self.propagate(cell_values, node)
 
-    def visit_for_range(self, for_range_cm, input, node):
-        out = self.propagate(input, node)
+    def visit_for_range(self, for_range_cm, cell_values, node):
+        out = self.propagate(cell_values, node)
         var = for_range_cm.var
         return out.invalidate_values_containing(var)
 
-    def visit_variable_command(self, variable_cmd, input, node):
-        return self.propagate(input, node)
+    def visit_variable_command(self, variable_cmd, cell_values, node):
+        return self.propagate(cell_values, node)
 
-    def visit_assign_command(self, assign_cmd, input, node):
-        out = self.propagate(input, node)
+    def visit_assign_command(self, assign_cmd, cell_values, node):
+        out = self.propagate(cell_values, node)
         var = assign_cmd.var
         return out.invalidate_values_containing(var)
 
-    def visit_declare_command(self, declare_cmd, input, node):
-        out = self.propagate(input, node)
+    def visit_declare_command(self, declare_cmd, cell_values, node):
+        out = self.propagate(cell_values, node)
         var = declare_cmd.var
         return out.invalidate_values_containing(var)
 
-    def visit_sync_command(self, sync_cmd, input, node):
-        return self.propagate(input, node)
+    def visit_sync_command(self, sync_cmd, cell_values, node):
+        return self.propagate(cell_values, node)
 
-    def visit_asm_command(self, asm_command, input, node):
-        return self.propagate(input, node)
+    def visit_asm_command(self, asm_command, cell_values, node):
+        return self.propagate(cell_values, node)
 
-    def visit_mem_store_command(self, store_command, input, node):
-        return self.propagate(input, node)
+    def visit_mem_store_command(self, store_command, cell_values, node):
+        return self.propagate(cell_values, node)
 
 
 def _in_job_insert_command_here(
     node: _CFGNode, pred: _CFGNode.Neighbor
-) -> Tuple[List[QiCommand], int]:
+) -> tuple[list[QiCommand], int]:
     pred_node = pred.node
 
     if node.instruction_index == 0:
-        return (node.instruction_list, 0)
+        return node.instruction_list, 0
     else:
         if pred.src_edge_type == _CFGNode.SrcEdgeType.IF_FALSE:
-            return (pred.node.command._else_body, 0)
+            return pred.node.command._else_body, 0
         elif pred.src_edge_type == _CFGNode.SrcEdgeType.IF_TRUE:
-            return (pred.node.command.body, 0)
+            return pred.node.command.body, 0
         else:
-            return (pred_node.instruction_list, pred_node.instruction_index + 1)
+            return pred_node.instruction_list, pred_node.instruction_index + 1
 
 
 class MemoryParameterVisitor(QiCommandVisitor):
     """Checks if visited instructions contain a certain memory parameter."""
 
-    def __init__(self, config: "InsertMemoryParameterConfiguration"):
+    def __init__(self, config: InsertMemoryParameterConfiguration):
         """
         `compare_eq_memory_param` compares to possible values of a memory parameter.
         Usually this just compares two QiExpressions, but it might also include None.
         For example, Play(Readout) frequency can be None.
         """
         # If self.mem_param_values contains Multiple, then there were multiple different offsets for this cell found.
-        self.mem_param_values: Dict[QiCell, Union[QiExpression, Multiple]] = {}
+        self.mem_param_values: dict[QiCell, QiExpression | Multiple] = {}
         self.config = config
 
-    def visit_context_manager(self, context_manager):
+    def visit_context_manager(self, context_manager, *args, **kwargs):
         for cmd in context_manager.body:
             cmd.accept(self)
 
-    def visit_if(self, if_cm):
+    def visit_if(self, if_cm, *args, **kwargs):
         for cmd in if_cm.body:
             cmd.accept(self)
 
         for cmd in if_cm._else_body:
             cmd.accept(self)
 
-    def visit_cell_command(self, cell_cmd):
+    def visit_cell_command(self, cell_cmd, *args, **kwargs):
         mem_param = self.config.get_memory_param(cell_cmd)
         if mem_param is not IrrelevantCommand:
             for cell in cell_cmd._relevant_cells:
@@ -350,7 +359,7 @@ class MemoryParameterVisitor(QiCommandVisitor):
                     ):
                         self.mem_param_values[cell] = Multiple
 
-    def visit_parallel(self, parallel_cm):
+    def visit_parallel(self, parallel_cm, *args, **kwargs):
         offsets = _collect_memory_param_in_parallel_block(parallel_cm, self.config)
 
         for cell, mem_param in offsets.items():
@@ -369,31 +378,28 @@ class MemoryParameterVisitor(QiCommandVisitor):
 class _MemoryParameterConstantVisitor(QiCommandVisitor):
     """Checks if a given memory parameter is constant."""
 
-    def __init__(
-        self, cell: QiCell, configuration: "InsertMemoryParameterConfiguration"
-    ):
+    def __init__(self, cell: QiCell, configuration: InsertMemoryParameterConfiguration):
         self.cell = cell
         self.found_memory_param = None
         self.result = True  # Is a constant memory parameter used
         self.config = configuration
 
-    def visit_context_manager(self, context_manager):
+    def visit_context_manager(self, context_manager, *args, **kwargs):
         for item in context_manager.body:
             item.accept(self)
 
-    def visit_if(self, if_cm):
+    def visit_if(self, if_cm, *args, **kwargs):
         for command in if_cm.body:
             command.accept(self)
 
         for command in if_cm._else_body:
             command.accept(self)
 
-    def visit_cell_command(self, cell_cmd):
+    def visit_cell_command(self, cell_cmd, *args, **kwargs):
         if cell_cmd.cell is not self.cell:
             return
 
         mem_param = self.config.get_memory_param(cell_cmd)
-
         if mem_param is IrrelevantCommand:
             return
 
@@ -412,7 +418,7 @@ class _MemoryParameterConstantVisitor(QiCommandVisitor):
 
 
 def _has_cell_constant_recording_offset(
-    job: QiJob, cell: QiCell, configuration: "InsertMemoryParameterConfiguration"
+    job: QiJob, cell: QiCell, configuration: InsertMemoryParameterConfiguration
 ):
     visitor = _MemoryParameterConstantVisitor(cell, configuration)
 
@@ -429,28 +435,28 @@ class ExpressionInvariantVisitor(QiCommandVisitor):
         self.expr = expr
         self.result = True
 
-    def visit_context_manager(self, context_manager):
+    def visit_context_manager(self, context_manager, *args, **kwargs):
         for cmd in context_manager.body:
             cmd.accept(self)
 
-    def visit_if(self, if_cm):
+    def visit_if(self, if_cm, *args, **kwargs):
         for cmd in if_cm.body:
             cmd.accept(self)
 
         for cmd in if_cm._else_body:
             cmd.accept(self)
 
-    def visit_assign_command(self, assign_cmd):
+    def visit_assign_command(self, assign_cmd, *args, **kwargs):
         self.result = self.result and (
             self.expr is None or assign_cmd.var not in self.expr.contained_variables
         )
 
-    def visit_declare_command(self, declare_cmd):
+    def visit_declare_command(self, declare_cmd, *args, **kwargs):
         self.result = self.result and (
             self.expr is None or declare_cmd.var not in self.expr.contained_variables
         )
 
-    def visit_for_range(self, for_range_cm):
+    def visit_for_range(self, for_range_cm, *args, **kwargs):
         self.result = self.result and (
             self.expr is None or for_range_cm.var not in self.expr.contained_variables
         )
@@ -460,10 +466,7 @@ class ExpressionInvariantVisitor(QiCommandVisitor):
 def _insert_pseudo_command_before_for_loop(
     cfg: _CFG, for_loop: _CFGNode, pseudo_command: QiCommand
 ):
-    assert isinstance(for_loop.command, ForRange)
-    assert not isinstance(
-        pseudo_command, QiContextManager
-    )  # only handle simple commands
+    assert isinstance(for_loop.command, ForRangeCommand)
 
     new_loop_preds = set()
     command_preds = set()
@@ -507,7 +510,7 @@ def _insert_pseudo_command_before_for_loop(
 
 def _add_pseudo_store_instructions(
     cfg: _CFG,
-    configuration: "InsertMemoryParameterConfiguration",
+    configuration: InsertMemoryParameterConfiguration,
 ):
     # For each cell
     # Check the body of every for loop
@@ -520,7 +523,7 @@ def _add_pseudo_store_instructions(
     for_loops = [
         x
         for x in cfg.nodes
-        if x.type == _CFGNode.Type.COMMAND and isinstance(x.command, ForRange)
+        if x.type == _CFGNode.Type.COMMAND and isinstance(x.command, ForRangeCommand)
     ]
 
     for for_loop in for_loops:
@@ -533,11 +536,12 @@ def _add_pseudo_store_instructions(
                 continue
 
             expression_invariant = ExpressionInvariantVisitor(mem_param)
+
             for_loop.command.accept(expression_invariant)
 
             if expression_invariant.result:
                 # Insert pseudo command
-                pseudo_command = cQiMemStore(
+                pseudo_command = MemStoreCommand(
                     cell, configuration.recording_module_address, mem_param
                 )
 
@@ -552,7 +556,6 @@ class InsertMemoryParameterConfiguration:
         recording_module_address: int,
         get_memory_param,
         if_memory_param_is_constant,
-        compare_eq_memory_param,
         anticipated_analysis=AnticipatedMemoryParameterAnalysis,
         available_analysis=AvailableMemoryParameterAnalysis,
     ):
@@ -568,21 +571,24 @@ class InsertMemoryParameterConfiguration:
         # and don't insert any store instructions.
         self.if_memory_param_is_constant = if_memory_param_is_constant
 
-        # `compare_eq_memory_param` is a function if two values of the memory param are equal.
-        # Usually this just compare two QiExpression if they're syntactically equal. But others also have None as valid value which
-        # is handled with the help of this function.
-        self.compare_eq_memory_param = compare_eq_memory_param
-
         # The anticipated and available analysis can be modified if special behaviour is needed in certain cases.
         self.anticipated_analysis = anticipated_analysis
         self.available_analysis = available_analysis
+
+    def compare_eq_memory_param(
+        self, x: QiExpression | None, y: QiExpression | None
+    ) -> bool:
+        if isinstance(x, QiExpression) and isinstance(y, QiExpression):
+            return x._equal_syntax(y)
+        else:
+            return x is None and y is None
 
 
 def _insert_memory_parameter_store_commands(
     job: QiJob, configuration: InsertMemoryParameterConfiguration
 ):
     """
-    Inserts cQiMemStore commands into the QiJob needed for a memory parameter.
+    Inserts MemStoreCommand commands into the QiJob needed for a memory parameter.
 
     'get_memory_param' is a function which extracts a memory parameter from a QiCellCommand, if it exists.
     (see '_get_recording_offset' for an example)
@@ -616,8 +622,8 @@ def _insert_memory_parameter_store_commands(
         CellValues(),
     )
 
-    # Find locations in job.commands where to insert which cQiMemStore commands.
-    command_insertions: Dict[int, Tuple[List, List]] = {}
+    # Find locations in job.commands where to insert which MemStoreCommand commands.
+    command_insertions: dict[int, tuple[list, list]] = {}
 
     for cell in job.cells:
         if _has_cell_constant_recording_offset(job, cell, configuration):
@@ -627,8 +633,10 @@ def _insert_memory_parameter_store_commands(
             )
             if mem_param.type == FlatLatticeValue.Type.VALUE:
                 mem_param = mem_param.value
-                assert isinstance(mem_param, (_QiConstValue, QiCellProperty))
-                configuration.if_memory_param_is_constant(job, cell, mem_param)
+                assert isinstance(
+                    mem_param, (_QiConstValue, QiCellProperty)
+                ), f"mem_param is {mem_param}, but should be constant."
+                configuration.if_memory_param_is_constant(cell, mem_param)
             else:
                 # Mem param is never used
                 pass
@@ -651,16 +659,16 @@ def _insert_memory_parameter_store_commands(
                 ):
                     instruction_list, idx = _in_job_insert_command_here(node, pred)
 
-                    command = cQiMemStore(
+                    command = MemStoreCommand(
                         cell, configuration.recording_module_address, antic_value.value
                     )
-                    l = command_insertions.get(
+                    lists = command_insertions.get(
                         id(instruction_list), ([], instruction_list)
                     )
-                    l[0].append((idx, command))
-                    command_insertions[id(instruction_list)] = l
+                    lists[0].append((idx, command))
+                    command_insertions[id(instruction_list)] = lists
 
-    # Insert collected cQiMemStore commands in the descending index order.
+    # Insert collected MemStoreCommand commands in the descending index order.
     # Otherwise, we would invalidate higher indices.
     for _, data in command_insertions.items():
         insertions, instruction_list = data
@@ -672,7 +680,7 @@ def _insert_memory_parameter_store_commands(
 
 
 class _IrrelevantCommand(QiExpression):
-    def accept(self, visitor: QiExpressionVisitor):
+    def accept(self, _visitor: QiExpressionVisitor):
         pass
 
 
@@ -680,139 +688,184 @@ IrrelevantCommand = _IrrelevantCommand()
 
 
 RECORDING_OFFSET_ADDRESS = 0x8010 // 4
+MANIPULATION_PULSE_FREQUENCY_ADDRESS = 0x18014 // 4
+READOUT_PULSE_FREQUENCY_ADDRESS = 0x38100 // 4
+MANIPULATION_PULSE_PHASE_ADDRESS = 0x18030 // 4
+READOUT_PULSE_PHASE_ADDRESS = 0x38030 // 4
+MANIPULATION_PULSE_AMPLITUDE_ADDRESS = 0x18010 // 4
+READOUT_PULSE_AMPLITUDE_ADDRESS = 0x38010 // 4
 
 
-def _get_recording_offset(cmd) -> Optional[QiExpression]:
-    if isinstance(cmd, cQiRecording):
-        return cmd._offset
-    elif isinstance(cmd, cQiPlayReadout) and cmd.recording is not None:
-        return cmd.recording._offset
-    else:
-        return IrrelevantCommand
-
-
-def _initialize_constant_recording_offset(
-    job, cell, offset: Union[_QiConstValue, QiCellProperty]
-):
-    assert offset.type == QiType.TIME
-    cell._initial_rec_offset = offset.float_value
-
-
-def insert_recording_offset_store_commands(job: QiJob):
-    config = InsertMemoryParameterConfiguration(
-        RECORDING_OFFSET_ADDRESS,
-        _get_recording_offset,
-        _initialize_constant_recording_offset,
-        lambda x, y: x._equal_syntax(y),
-    )
-
-    _insert_memory_parameter_store_commands(
-        job,
-        config,
-    )
-
-
-class AnticipatedPulseFrequencyVisitor(AnticipatedMemoryParameterAnalysis):
-    def __init__(self, config, pulse_command):
-        """pulse_command is either the type cQiPlay or cQiPlayReadout."""
-
-        self.pulse_command = pulse_command
+class AnticipatedPulseVisitor(AnticipatedMemoryParameterAnalysis):
+    def __init__(self, config, pulse_command, property):
+        """pulse_command is either the type PlayCommand or PlayReadoutCommand."""
         super().__init__(config)
 
-    def visit_cell_command(self, cell_cmd, input: CellValues, node):
+        self.pulse_command = pulse_command
+        self.property = property
+
+    def visit_cell_command(self, cell_cmd, cell_values: CellValues, node):
         if (
             isinstance(cell_cmd, self.pulse_command)
-            and cell_cmd.pulse.frequency is None
+            and self.property(cell_cmd.pulse) is None
         ):
             # If a Play command has no frequency specified it should keep using the frequency that was previously set.
             # Therefore, we need to prevent store instructions for following commands to be placed before this instructions.
             # We do this, by setting the anticipated value to no_const, because we look for FlatLatticeValue.value of
             # the anticipated analysis when inserting store instructions.  (see _insert_memory_parameter_store_commands)
-            out = copy(input)
+            out = copy(cell_values)
             out.set_cell_value(cell_cmd.cell, FlatLatticeValue.no_const())
             return out
         else:
-            return super().visit_cell_command(cell_cmd, input, node)
-
-
-def _pulse_frequency_compare(x, y):
-    if isinstance(x, QiExpression) and isinstance(y, QiExpression):
-        return x._equal_syntax(y)
-    else:
-        return x is None and y is None
-
-
-class PulseFrequencyVisitor(MemoryParameterVisitor):
-    def __init__(self, get_memory_param, pulse_command):
-        self.pulse_command = pulse_command
-        super().__init__(get_memory_param)
-
-
-MANIPULATION_PULSE_FREQUENCY_ADDRESS = 0x18014 // 4
-
-
-def _get_manip_pulse_frequency(cmd: QiCommand):
-    if isinstance(cmd, cQiPlay):
-        pulse: QiPulse = cmd.pulse
-        return pulse.frequency
-    else:
-        return IrrelevantCommand
+            return super().visit_cell_command(cell_cmd, cell_values, node)
 
 
 def _initialize_constant_manipulation_pulse_frequency(
-    job, cell: QiCell, frequency: Union[_QiConstValue, QiCellProperty]
+    cell: QiCell, frequency: _QiConstValue | QiCellProperty
 ):
     assert frequency.type == QiType.FREQUENCY
     cell._initial_manip_freq = frequency.float_value
 
 
-def insert_manipulation_pulse_frequency_store_commands(job: QiJob):
-    config = InsertMemoryParameterConfiguration(
-        MANIPULATION_PULSE_FREQUENCY_ADDRESS,
-        _get_manip_pulse_frequency,
-        _initialize_constant_manipulation_pulse_frequency,
-        _pulse_frequency_compare,
-        anticipated_analysis=lambda config: AnticipatedPulseFrequencyVisitor(
-            config, cQiPlay
-        ),
-    )
-
-    _insert_memory_parameter_store_commands(
-        job,
-        config,
-    )
-
-
-READOUT_PULSE_FREQUENCY_ADDRESS = 0x38100 // 4
-
-
-def _get_readout_pulse_frequency(cmd: QiCommand):
-    if isinstance(cmd, cQiPlayReadout):
-        pulse: QiPulse = cmd.pulse
-        return pulse.frequency
-    else:
-        return IrrelevantCommand
-
-
 def _initialize_constant_readout_pulse_frequency(
-    job, cell: QiCell, frequency: Union[_QiConstValue, QiCellProperty]
+    cell: QiCell, frequency: _QiConstValue | QiCellProperty
 ):
     assert frequency.type == QiType.FREQUENCY
     cell._initial_readout_freq = frequency.float_value
 
 
-def insert_readout_pulse_frequency_store_commands(job: QiJob):
-    config = InsertMemoryParameterConfiguration(
-        READOUT_PULSE_FREQUENCY_ADDRESS,
-        _get_readout_pulse_frequency,
-        _initialize_constant_readout_pulse_frequency,
-        _pulse_frequency_compare,
-        anticipated_analysis=lambda config: AnticipatedPulseFrequencyVisitor(
-            config, cQiPlayReadout
+def _initialize_constant_manipulation_pulse_phase(
+    cell: QiCell, phase: _QiConstValue | QiCellProperty
+):
+    assert phase.type == QiType.PHASE
+    cell._initial_phase = phase.float_value
+
+
+def _initialize_constant_readout_pulse_phase(
+    cell: QiCell, phase: _QiConstValue | QiCellProperty
+):
+    assert phase.type == QiType.PHASE
+    cell._initial_phase = phase.float_value
+
+
+def _initialize_constant_manipulation_pulse_amplitude(
+    cell: QiCell, amplitude: _QiConstValue | QiCellProperty
+):
+    assert amplitude.type == QiType.AMPLITUDE
+    cell._initial_amplitude = amplitude.float_value
+
+
+def _initialize_constant_readout_pulse_amplitude(
+    cell: QiCell, amplitude: _QiConstValue | QiCellProperty
+):
+    assert amplitude.type == QiType.AMPLITUDE
+    cell._initial_amplitude = amplitude.float_value
+
+
+def _initialize_constant_recording_offset(cell, offset: _QiConstValue | QiCellProperty):
+    assert offset.type == QiType.TIME
+    cell._initial_rec_offset = offset.float_value
+
+
+def _get_recording_offset(cmd) -> QiExpression | None:
+    if isinstance(cmd, RecordingCommand):
+        return cmd._offset
+    elif isinstance(cmd, PlayReadoutCommand) and cmd.recording is not None:
+        return cmd.recording._offset
+    else:
+        return IrrelevantCommand
+
+
+def _get_manip_pulse_amplitude(cmd: QiCommand):
+    if isinstance(cmd, PlayCommand) and isinstance(cmd.pulse.amplitude, QiExpression):
+        return cmd.pulse.amplitude | (cmd.pulse.amplitude << 16)
+    else:
+        return IrrelevantCommand
+
+
+def _get_readout_pulse_amplitude(cmd: QiCommand):
+    if isinstance(cmd, PlayReadoutCommand) and isinstance(
+        cmd.pulse.amplitude, QiExpression
+    ):
+        return cmd.pulse.amplitude | (cmd.pulse.amplitude << 16)
+    else:
+        return IrrelevantCommand
+
+
+def _get_manip_pulse_property(cmd: QiCommand, property, transform=lambda x: x):
+    if isinstance(cmd, PlayCommand) and isinstance(property(cmd.pulse), QiExpression):
+        return transform(property(cmd.pulse))
+    else:
+        return IrrelevantCommand
+
+
+def _get_readout_pulse_property(cmd: QiCommand, property, transform=lambda x: x):
+    if isinstance(cmd, PlayReadoutCommand) and isinstance(
+        property(cmd.pulse), QiExpression
+    ):
+        return transform(property(cmd.pulse))
+    else:
+        return IrrelevantCommand
+
+
+def replace_variable_assignment_with_store_commands(job: QiJob):
+    configs = (
+        InsertMemoryParameterConfiguration(
+            RECORDING_OFFSET_ADDRESS,
+            _get_recording_offset,
+            _initialize_constant_recording_offset,
+        ),
+        InsertMemoryParameterConfiguration(
+            MANIPULATION_PULSE_FREQUENCY_ADDRESS,
+            lambda cmd: _get_manip_pulse_property(cmd, lambda x: x.frequency),
+            _initialize_constant_manipulation_pulse_frequency,
+            anticipated_analysis=lambda config: AnticipatedPulseVisitor(
+                config, PlayCommand, lambda pulse: pulse.frequency
+            ),
+        ),
+        InsertMemoryParameterConfiguration(
+            READOUT_PULSE_FREQUENCY_ADDRESS,
+            lambda cmd: _get_readout_pulse_property(cmd, lambda x: x.frequency),
+            _initialize_constant_readout_pulse_frequency,
+            anticipated_analysis=lambda config: AnticipatedPulseVisitor(
+                config, PlayReadoutCommand, lambda pulse: pulse.frequency
+            ),
+        ),
+        InsertMemoryParameterConfiguration(
+            MANIPULATION_PULSE_PHASE_ADDRESS,
+            lambda cmd: _get_manip_pulse_property(cmd, lambda x: x.phase),
+            _initialize_constant_manipulation_pulse_phase,
+            anticipated_analysis=lambda config: AnticipatedPulseVisitor(
+                config, PlayCommand, lambda pulse: pulse.phase
+            ),
+        ),
+        InsertMemoryParameterConfiguration(
+            READOUT_PULSE_PHASE_ADDRESS,
+            lambda cmd: _get_readout_pulse_property(cmd, lambda x: x.phase),
+            _initialize_constant_readout_pulse_phase,
+            anticipated_analysis=lambda config: AnticipatedPulseVisitor(
+                config, PlayReadoutCommand, lambda pulse: pulse.phase
+            ),
+        ),
+        InsertMemoryParameterConfiguration(
+            MANIPULATION_PULSE_AMPLITUDE_ADDRESS,
+            _get_manip_pulse_amplitude,
+            _initialize_constant_manipulation_pulse_amplitude,
+            anticipated_analysis=lambda config: AnticipatedPulseVisitor(
+                config, PlayCommand, lambda pulse: pulse.amplitude
+            ),
+        ),
+        InsertMemoryParameterConfiguration(
+            READOUT_PULSE_AMPLITUDE_ADDRESS,
+            _get_readout_pulse_amplitude,
+            _initialize_constant_readout_pulse_amplitude,
+            anticipated_analysis=lambda config: AnticipatedPulseVisitor(
+                config, PlayReadoutCommand, lambda pulse: pulse.amplitude
+            ),
         ),
     )
-
-    _insert_memory_parameter_store_commands(
-        job,
-        config,
-    )
+    for config in configs:
+        _insert_memory_parameter_store_commands(
+            job,
+            config,
+        )

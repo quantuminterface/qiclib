@@ -76,22 +76,25 @@ precision. If the multiplication product exceeds the valid range of the 16bit da
 width, it will be clipped and a saturation flag will indicate this. A corresponding
 message will be generated within the status report until it is manually cleared.
 """
-# Py3.7: from __future__ import annotations
+
+from __future__ import annotations
+
 import warnings
-from typing import List, Dict, Any, Tuple, Optional
+from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 
+import qiclib.packages.grpc.datatypes_pb2 as dt
+import qiclib.packages.grpc.pulsegen_pb2 as proto
+import qiclib.packages.grpc.pulsegen_pb2_grpc as grpc_stub
+import qiclib.packages.utility as util
 from qiclib.hardware.platform_component import (
     PlatformComponent,
     platform_attribute,
     platform_attribute_collector,
 )
-import qiclib.packages.utility as util
 from qiclib.packages.servicehub import ServiceHubCall
-import qiclib.packages.grpc.pulsegen_pb2 as proto
-import qiclib.packages.grpc.datatypes_pb2 as dt
-import qiclib.packages.grpc.pulsegen_pb2_grpc as grpc_stub
 
 
 @platform_attribute_collector
@@ -128,7 +131,7 @@ class PulseGen(PlatformComponent):
         self._component = dt.EndpointIndex(value=self._index)
 
         # TODO Numbers to appropriate constants
-        self._triggerset: List[Optional["TriggerSet"]] = [None]
+        self._triggerset: list[TriggerSet | None] = [None]
         self._triggerset.extend(
             TriggerSet(
                 f"{self.name} Trigger {i:02d}",
@@ -176,10 +179,10 @@ class PulseGen(PlatformComponent):
 
         """
 
-        self._pulses: Dict[str, Dict[str, Any]] = {}
+        self._pulses: dict[str, dict[str, Any]] = {}
 
     @property
-    def triggerset(self) -> List[Optional["TriggerSet"]]:
+    def triggerset(self) -> list[TriggerSet | None]:
         """A list containing the 14 triggersets (indices 1-14) of the signal generator.
 
         The index corresponds to the trigger value as specified within the sequencer.
@@ -199,7 +202,7 @@ class PulseGen(PlatformComponent):
 
     @property
     @platform_attribute
-    def pulses(self) -> Dict[str, Dict[str, Any]]:
+    def pulses(self) -> dict[str, dict[str, Any]]:
         """A dictionary of pulses loaded into the signal generator.
 
         Each pulse description (dictionary value) has a name (dictionary key).
@@ -234,7 +237,7 @@ class PulseGen(PlatformComponent):
 
             # Load pulses into the manipulation signal generator of the first unit cell:
             qic.cell[0].manipulation.pulses = {
-                 "Rx pi": {
+                "Rx pi": {
                     "trigger": 1,
                     "length": 200e-9,
                 },
@@ -263,7 +266,7 @@ class PulseGen(PlatformComponent):
         return self._pulses
 
     @pulses.setter
-    def pulses(self, pulses: Dict[str, Dict[str, Any]]):
+    def pulses(self, pulses: dict[str, dict[str, Any]]):
         """loads the given pulses
 
         :param pulses:
@@ -272,7 +275,7 @@ class PulseGen(PlatformComponent):
         self.load_pulses(pulses)
 
     def load_pulses(
-        self, pulse_dict: Dict[str, Dict[str, Any]], drag_amplitude: float = None
+        self, pulse_dict: dict[str, dict[str, Any]], drag_amplitude: float | None = None
     ):
         """Loads a set of pulses, given as dictionary into the signal generator.
 
@@ -395,7 +398,7 @@ class PulseGen(PlatformComponent):
             # Probably no LO is specified, in that case we cannot adapt the RF frequency
             pass
 
-    def output(self, enable):
+    def output(self, enable: bool):
         """Enables or disables the output of the PulseGen and the local oscillator (if present)."""
         self.nco_enable(enable)
         try:
@@ -418,7 +421,7 @@ class PulseGen(PlatformComponent):
         self._stub.ResetStatusFlags(self._component)
 
     @ServiceHubCall(errormsg="Error obtaining the signal generator status flags")
-    def get_status_flags(self) -> proto.StatusFlags:  # type: ignore
+    def get_status_flags(self) -> proto.StatusFlags:
         """Obtains the status flags of the signal generator.
 
         The following flags will be returned as object properties:
@@ -473,7 +476,7 @@ class PulseGen(PlatformComponent):
     @ServiceHubCall(
         errormsg="Failed to execute a manual trigger for the signal generator"
     )
-    def trigger_manually(self, triggerset):
+    def trigger_manually(self, triggerset: int):
         """Manually triggers the Pulse Generator module with the given triggerset.
 
         .. note::
@@ -507,7 +510,7 @@ class PulseGen(PlatformComponent):
     @ServiceHubCall(
         errormsg="Could not read the amplitude calibration of signal generator"
     )
-    def amplitude_calibration(self) -> Tuple[float, float]:
+    def amplitude_calibration(self) -> tuple[float, float]:
         """A tuple containing calibration values of the I and Q output amplitudes.
 
         Valid values are in the range of [0, 2) representing multiplication factors.
@@ -521,7 +524,7 @@ class PulseGen(PlatformComponent):
 
     @amplitude_calibration.setter
     @ServiceHubCall(errormsg="Failed to set amplitude calibration of signal generator")
-    def amplitude_calibration(self, amplitude_calibration: Tuple[float, float]):
+    def amplitude_calibration(self, amplitude_calibration: tuple[float, float]):
         if len(amplitude_calibration) != 2:
             raise ValueError("(I, Q) tuple for calibration factors expected.")
 
@@ -548,7 +551,7 @@ class PulseGen(PlatformComponent):
         """Resets the envelope memory erasing all stored pulse forms."""
         self._stub.ResetEnvelopeMemory(self._component)
 
-    def get_configuration_dict(self) -> Dict[str, Any]:
+    def get_configuration_dict(self) -> dict[str, Any]:
         """Returns a dictionary containing all configuration values which will not be
         automatically overwritten for all experiments (esp. calibration values).
 
@@ -565,7 +568,7 @@ class PulseGen(PlatformComponent):
     ##################################
 
     @property
-    def nco_frequency(self):
+    def nco_frequency(self) -> float:
         """The internal frequency in Hz used for the generated microwave pulses.
 
         .. deprecated::
@@ -649,7 +652,7 @@ class TriggerSet(PlatformComponent):
     @property
     @platform_attribute
     @ServiceHubCall(errormsg="Could not read trigger offset of Triggerset.")
-    def trigger_offset(self):
+    def trigger_offset(self) -> int:
         """Time offset between trigger signal and generation of the pulse in seconds.
 
         This is helpful if you want to trigger two modules at the same time but delay
@@ -659,7 +662,7 @@ class TriggerSet(PlatformComponent):
 
     @trigger_offset.setter
     @ServiceHubCall(errormsg="Could not set trigger offset of Triggerset.")
-    def trigger_offset(self, trigger_offset):
+    def trigger_offset(self, trigger_offset: int):
         # self._stub.SetTriggerOffset(
         #    proto.TOffset(index=self._indexset, offset=trigger_offset)
         # )
@@ -668,7 +671,7 @@ class TriggerSet(PlatformComponent):
     @ServiceHubCall(errormsg="Could not load the pulse into the Triggerset.")
     def load_pulse(
         self,
-        pulseform: np.ndarray,
+        pulseform: npt.ArrayLike,
         phase: float = 0.0,
         offset: float = 0.0,
         hold: bool = False,

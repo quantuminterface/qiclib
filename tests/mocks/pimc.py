@@ -23,7 +23,7 @@ class MockPIMCService:
         pass
 
     def GetInfo(self, _):
-        return Info(pimcVersion=3, projectId=3, platformId=0x23)
+        return Info(pimcVersion=4, projectId=3, platformId=0x23)
 
 
 module = "qiclib.packages.grpc.pimc_pb2_grpc.PIMCServiceStub"

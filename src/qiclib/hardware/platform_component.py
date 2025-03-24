@@ -18,8 +18,11 @@
 All modules representing a part of the QiController should be derived from it. It also
 includes automatic integration of the component into the Qkit framework.
 """
+
+from __future__ import annotations
+
 import abc
-from typing import Dict, Any, Set
+from typing import Any, ClassVar
 
 from qiclib.packages.qkit_polyfill import QKIT_ENABLED, Instrument, qkit
 from qiclib.packages.servicehub import Connection
@@ -46,7 +49,7 @@ class PlatformComponent(abc.ABC):
         by default True
     """
 
-    platform_attributes: Set[str] = set()
+    platform_attributes: ClassVar[set[str]] = set()
     """Set of all platform attributes in the component which are visible e.g. for Qkit.
 
     Using Qkit, they will be stored at the beginning of each measurement and appended
@@ -85,9 +88,9 @@ class QkitInstrumentProxy(Instrument):
                 qkit.instruments.add(self)
             except AttributeError:
                 pass  # Qkit has not been started with qkit.start() so this fails
-        self._params: Dict[str, Any] = {}
+        self._params: dict[str, Any] = {}
 
-    def get_parameters(self) -> Dict:
+    def get_parameters(self) -> dict:
         """Collects the parameters of the qkit_attributes
 
         :return:

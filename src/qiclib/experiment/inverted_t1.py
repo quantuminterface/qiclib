@@ -14,11 +14,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """This file contains the InvertedT1 experiment for the QiController."""
+
 from qiclib.experiment.t1 import T1
 
 
 class InvertedT1(T1):
-    """Experiment that measures the decay out of a initialized \|0> state
+    r"""Experiment that measures the decay out of a initialized \|0> state
     into thermal equilibrium.
 
     At the beginning, the qubit is prepared in state \|0>

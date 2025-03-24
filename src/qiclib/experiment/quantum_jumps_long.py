@@ -14,13 +14,14 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """This file contains the IQCloud experiment description for the QiController."""
-import os
+
 import datetime
+import os
+
 import numpy as np
 
 from qiclib.experiment.quantum_jumps import QuantumJumps
-
-from qiclib.packages.qkit_polyfill import DateTimeGenerator, QKIT_ENABLED
+from qiclib.packages.qkit_polyfill import QKIT_ENABLED, DateTimeGenerator
 
 
 class QuantumJumpsLong(QuantumJumps):

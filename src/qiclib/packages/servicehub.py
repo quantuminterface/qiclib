@@ -14,16 +14,17 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import functools
+
 import grpc
 import wrapt
 
 
 class Connection:
-    def __init__(self, **kwargs):
-        self.ip = kwargs.get("ip", None) or "0.0.0.0"
-        self.port = kwargs.get("port", None) or 50058
+    def __init__(self, ip="0.0.0.0", port=50058, silent=False):
+        self.ip = ip
+        self.port = port
         self.grpc_connection = f"{self.ip}:{self.port}"
-        self._silent = kwargs.get("silent", False)
+        self._silent = silent
         self._channel = None
         self._open = False
         self.open()
@@ -67,17 +68,19 @@ def ServiceHubCall(call=None, errormsg="Error executing command", tries=5):
             instance = args[0]
         if not instance._conn.is_open:
             raise RuntimeError("No connection! Create a new QiController instance.")
-        for attempt in range(0, tries):
+        for attempt in range(tries):
             try:
                 return call(*args, **kwargs)
             except grpc.RpcError as error:
                 code = error.code()  # pylint: disable=no-member
                 details = error.details()  # pylint: disable=no-member
-                if code in (
-                    grpc.StatusCode.INVALID_ARGUMENT,
-                    grpc.StatusCode.NOT_FOUND,
-                ):
-                    break  # No retry
+                if code == grpc.StatusCode.NOT_FOUND:
+                    raise  # No retry
+                if code == grpc.StatusCode.INVALID_ARGUMENT:
+                    raise ValueError(details) from error
+                if code == grpc.StatusCode.UNIMPLEMENTED:
+                    raise NotImplementedError(details) from error
+
                 if attempt < tries - 1:
                     print(f"Internal Error. Retry {attempt+1} of {tries-1}...")
             raise RuntimeError(f"{errormsg} ({code}). Error message:\n{details}")

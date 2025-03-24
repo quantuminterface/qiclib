@@ -15,8 +15,8 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 from unittest import mock
 
-from qiclib.packages.grpc.recording_pb2 import *
 from qiclib.packages.grpc.datatypes_pb2 import *
+from qiclib.packages.grpc.recording_pb2 import *
 
 
 class MockRecordingServiceStub:
@@ -38,8 +38,8 @@ class MockRecordingServiceStub:
     def GetInternalPhaseOffset(self, _):
         return PhaseOffset(index=EndpointIndex(value=0), value=0)
 
-    def GetValueShiftOffset(self, _):
-        return ValueShiftOffset(index=EndpointIndex(value=0), value=0)
+    def GetExpectedHighestSignalAmplitude(self, _):
+        return Int(value=0)
 
     def GetAverageShift(self, _):
         return AverageShift(index=EndpointIndex(value=0), value=0)

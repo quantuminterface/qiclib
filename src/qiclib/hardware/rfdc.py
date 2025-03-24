@@ -31,17 +31,17 @@ Obtain the current frequency of the NCO via the :meth:`RFDataConverter.get_mixer
 Using the :meth:`RFDataConverter.set_mixer_frequency`, the sampling frequency of a mixer can be changed.
 The Frequency range is -Fs/2 to Fs/2.
 """
+
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
 
-from qiclib.hardware.platform_component import PlatformComponent
-
-from qiclib.packages.servicehub import ServiceHubCall
-import qiclib.packages.grpc.rfdc_pb2 as proto
 import qiclib.packages.grpc.datatypes_pb2 as dt
+import qiclib.packages.grpc.rfdc_pb2 as proto
 import qiclib.packages.grpc.rfdc_pb2_grpc as grpc_stub
+from qiclib.hardware.platform_component import PlatformComponent
+from qiclib.packages.servicehub import ServiceHubCall
 
 
 class MixerMode(Enum):

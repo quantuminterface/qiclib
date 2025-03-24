@@ -16,7 +16,7 @@
 def _get_for_range_end_value(start, end, step):
     """Returns end value of ForRange or None if start or end are QiVariables.
     Stupid but no need to check validity of input, in case of unrolled loop"""
-    from .qi_var_definitions import _QiVariableBase, _QiConstValue, QiCellProperty
+    from .qi_var_definitions import QiCellProperty, _QiConstValue, _QiVariableBase
 
     if (
         isinstance(start, _QiVariableBase)
@@ -42,7 +42,7 @@ def _get_for_range_end_value(start, end, step):
 def _get_for_range_iterations(start, end, step):
     """Returns number of iterations of ForRange or None if start or end are QiVariables.
     Stupid but no need to check validity of input, in case of unrolled loop"""
-    from .qi_var_definitions import _QiVariableBase, _QiConstValue, QiCellProperty
+    from .qi_var_definitions import QiCellProperty, _QiConstValue, _QiVariableBase
 
     if (
         isinstance(start, _QiVariableBase)

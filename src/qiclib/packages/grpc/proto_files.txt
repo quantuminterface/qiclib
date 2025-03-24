@@ -1,0 +1,17 @@
+# This file contains the names of all proto files to be built.
+# Lines starting with '#' are ignored.
+datatypes.proto
+pimc.proto
+pulsegen.proto
+recording.proto
+servicehubcontrol.proto
+sequencer.proto
+taskrunner.proto
+qic_storage.proto
+qic_unitcell.proto
+rfdc.proto
+pulse_player.proto
+digital_trigger.proto
+direct_rf.proto
+balunatten.proto
+vna.proto

@@ -14,6 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """Module containing the benchmarking experiment."""
+
 from qiclib.experiment.base import BaseExperiment
 
 
@@ -106,7 +107,7 @@ class Benchmarking(BaseExperiment):
             lambda pulse: {"sequencer_start": self._pc_dict[pulse]},
         )
 
-    prediction = [
+    prediction = (
         0.0,  # zero state
         0.5,  # Rx pi/2
         0.5,  # Rx -pi/2
@@ -180,4 +181,4 @@ class Benchmarking(BaseExperiment):
         0.0,  # Ry -pi, Rx -pi
         0.0,  # Ry -pi, Ry pi
         0.0,  # Ry -pi, Ry -pi
-    ]
+    )

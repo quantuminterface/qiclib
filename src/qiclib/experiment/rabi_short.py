@@ -14,13 +14,14 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """This file contains the RabiShort experiment description for the QiController."""
+
 import qiclib.packages.utility as util
 
 from .rabi import Rabi
 
 
 class RabiShort(Rabi):
-    """Rabi experiment driving the qubit between the states \|0> and \|1>.
+    r"""Rabi experiment driving the qubit between the states \|0> and \|1>.
     Especially built for short pi pulses that need higher accuracy than
     the one clock cycle offered by the standard Rabi experiment.
     In this case the full sample rate can be used.

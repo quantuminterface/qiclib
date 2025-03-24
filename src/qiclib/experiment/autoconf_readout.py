@@ -14,15 +14,15 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """This file contains the rabi experiment description for the QiController."""
-from math import floor, log2
+
 import sys
 import warnings
+from math import floor, log2
+
 import numpy as np
 
-from qiclib.experiment.readout import IQFtReadout, IQRawReadout
-
 import qiclib.packages.utility as util
-
+from qiclib.experiment.readout import IQFtReadout, IQRawReadout
 
 STEPS_COARSE = 100e-9
 STEPS_MIDDLE = 24e-9

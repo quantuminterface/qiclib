@@ -14,11 +14,13 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """This file contains the IQCloud experiment description for the QiController."""
+
 import warnings
+
 import numpy as np
 
-from qiclib.experiment.base import BaseExperiment
 import qiclib.packages.utility as util
+from qiclib.experiment.base import BaseExperiment
 
 
 class QubitTimes(BaseExperiment):
@@ -117,7 +119,8 @@ class QubitTimes(BaseExperiment):
                         manipulation=self._p["Ry pi"]["trigger"],
                     )
                     # Now wait Pi/2-Time + Delay (can use same delay register)
-                    .trigger_registered(1).trigger_immediate(
+                    .trigger_registered(1)
+                    .trigger_immediate(
                         self._p["Rx pi/2"]["length"],
                         manipulation=self._p["Rx pi/2"]["trigger"],
                     )

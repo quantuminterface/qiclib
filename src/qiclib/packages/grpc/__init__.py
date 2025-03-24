@@ -20,9 +20,8 @@ procedure calls. As they are completely encapsulated by the component classes
 in `qiclib.hardware`, please look there for usage guidance.
 
 The protobuf specification files used to generate the interface are located
-within the git submodule beneath `./ipe_servicehub_protos`.
+within the git submodule `./ipe_servicehub_protos`.
 
-Regeneration requires the `grpcio-tools` to be installed from pip. Then, the
-script `./grpc_generate.sh` can be called with specifying the location of the
-protobuf specification files.
+The files are automatically generated as part of the build process
+(i.e., when calling `pip install -U .`).
 """

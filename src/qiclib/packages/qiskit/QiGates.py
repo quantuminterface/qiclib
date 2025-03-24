@@ -251,7 +251,7 @@ def T_gate(cell):
 
 @QiGate
 def iSWAP_gate(cell_c: QiCell, cell_t: QiCell, cell_i: QiCell):
-    """The iSWAP gate swaps the two qubit states \|01⟩ and \|10⟩ amplitudes by i.
+    r"""The iSWAP gate swaps the two qubit states \|01⟩ and \|10⟩ amplitudes by i.
 
     :param cell_c:
         The control qubit specified with its index
@@ -300,7 +300,7 @@ def iSWAP_gate(cell_c: QiCell, cell_t: QiCell, cell_i: QiCell):
 
 @QiGate
 def CNOT_gate(cell_c: QiCell, cell_t: QiCell, cell_i: QiCell):
-    """The controlled X gate, or CNOT gate, flips the target qubit if the control qubit is in the \|1⟩ state in the computational basis.
+    r"""The controlled X gate, or CNOT gate, flips the target qubit if the control qubit is in the \|1⟩ state in the computational basis.
     It is equivalent to a classical XOR gate.
 
     :param cell_c:
@@ -324,7 +324,7 @@ def CNOT_gate(cell_c: QiCell, cell_t: QiCell, cell_i: QiCell):
 
 @QiGate
 def Measure(cell: QiCell, state_to, save_to="result"):
-    """Quantum measurement on a single qubit in the computational basis {\|0〉, \|1〉}
+    r"""Quantum measurement on a single qubit in the computational basis {\|0〉, \|1〉}
 
     :param cell:
         The qubit acted on specified with its index

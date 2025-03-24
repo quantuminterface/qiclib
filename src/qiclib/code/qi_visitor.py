@@ -13,48 +13,57 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+from __future__ import annotations
+
 import abc
 from functools import wraps
-
-from typing import Set, List, Dict, Type, Any, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable, ClassVar
 
 if TYPE_CHECKING:
     from qiclib.code import QiCell
-    from qiclib.code.qi_jobs import QiCommand
+    from qiclib.code.qi_command import QiCellCommand, QiCommand
 
 
 class QiCommandVisitor(abc.ABC):
-    def visit_cell_command(self, cell_cmd):
+    """
+    Generic visitor to traverse the AST generated using a QiJob.
+    For tree traversal, one would typically subclass this visitor and overwrite
+    relevant methods.
+    """
+
+    def visit_cell_command(self, cell_cmd: QiCellCommand, *args, **kwargs):
+        """
+        Visits any cell command
+        """
+
+    def visit_context_manager(self, context_manager, *args, **kwargs):
         pass
 
-    def visit_context_manager(self, context_manager):
+    def visit_if(self, if_cm, *args, **kwargs):
         pass
 
-    def visit_if(self, if_cm):
+    def visit_parallel(self, parallel_cm, *args, **kwargs):
+        self.visit_context_manager(parallel_cm, *args, **kwargs)
+
+    def visit_for_range(self, for_range_cm, *args, **kwargs):
+        self.visit_context_manager(for_range_cm, *args, **kwargs)
+
+    def visit_variable_command(self, variable_cmd, *args, **kwargs):
         pass
 
-    def visit_parallel(self, parallel_cm):
-        self.visit_context_manager(parallel_cm)
+    def visit_assign_command(self, assign_cmd, *args, **kwargs):
+        self.visit_variable_command(assign_cmd, *args, **kwargs)
 
-    def visit_for_range(self, for_range_cm):
-        self.visit_context_manager(for_range_cm)
+    def visit_declare_command(self, declare_cmd, *args, **kwargs):
+        self.visit_variable_command(declare_cmd, *args, **kwargs)
 
-    def visit_variable_command(self, variable_cmd):
+    def visit_sync_command(self, sync_cmd, *args, **kwargs):
         pass
 
-    def visit_assign_command(self, assign_cmd):
-        self.visit_variable_command(assign_cmd)
-
-    def visit_declare_command(self, declare_cmd):
-        self.visit_variable_command(declare_cmd)
-
-    def visit_sync_command(self, sync_cmd):
+    def visit_asm_command(self, asm_cmd, *args, **kwargs):
         pass
 
-    def visit_asm_command(self, asm_cmd):
-        pass
-
-    def visit_mem_store_command(self, store_cmd):
+    def visit_mem_store_command(self, store_cmd, *args, **kwargs):
         pass
 
 
@@ -62,12 +71,12 @@ class QiCMContainedCellVisitor(QiCommandVisitor):
     """Visitor to check which cells are used inside context managers."""
 
     def __init__(self) -> None:
-        self.contained_cells: Set[QiCell] = set()
+        self.contained_cells: set[QiCell] = set()
 
-    def visit_cell_command(self, cell_cmd):
+    def visit_cell_command(self, cell_cmd, *args, **kwargs):
         self.contained_cells.update(cell_cmd._relevant_cells)
 
-    def visit_context_manager(self, context_manager):
+    def visit_context_manager(self, context_manager, *args, **kwargs):
         visitor = QiCMContainedCellVisitor()
         for item in context_manager.body:
             item.accept(visitor)
@@ -76,19 +85,19 @@ class QiCMContainedCellVisitor(QiCommandVisitor):
 
         self.contained_cells.update(visitor.contained_cells)
 
-    def visit_if(self, if_cm):
+    def visit_if(self, if_cm, *args, **kwargs):
         visitor = QiCMContainedCellVisitor()
         for command in if_cm.body:
             command.accept(visitor)
 
-        for command in if_cm._else_body:
+        for command in if_cm.else_body:
             command.accept(visitor)
 
         if_cm._relevant_cells.update(visitor.contained_cells)
 
         self.contained_cells.update(visitor.contained_cells)
 
-    def visit_parallel(self, parallel_cm):
+    def visit_parallel(self, parallel_cm, *args, **kwargs):
         visitor = QiCMContainedCellVisitor()
         for cmd_list in parallel_cm.entries:
             for cmd in cmd_list:
@@ -98,16 +107,16 @@ class QiCMContainedCellVisitor(QiCommandVisitor):
 
         self.contained_cells.update(visitor.contained_cells)
 
-    def visit_variable_command(self, variable_cmd):
+    def visit_variable_command(self, variable_cmd, *args, **kwargs):
         self.contained_cells.update(variable_cmd._relevant_cells)
 
-    def visit_sync_command(self, sync_cmd):
+    def visit_sync_command(self, sync_cmd, *args, **kwargs):
         self.contained_cells.update(sync_cmd._relevant_cells)
 
-    def visit_asm_command(self, asm_cmd):
+    def visit_asm_command(self, asm_cmd, *args, **kwargs):
         self.contained_cells.update(asm_cmd._relevant_cells)
 
-    def visit_mem_store_command(self, store_cmd):
+    def visit_mem_store_command(self, store_cmd, *args, **kwargs):
         self.contained_cells.update(store_cmd._relevant_cells)
 
 
@@ -119,46 +128,39 @@ class QiVarInForRange(QiCommandVisitor):
     def __init__(self, var) -> None:
         self.var = var
 
-    def raise_exception(self):
+    def _raise_exception(self):
         raise RuntimeError(
-            "Variable used in ForRange must not be used in internal Assign-Commands, var: "
-            + str(self.var)
+            f"Variable used in ForRange must not be used in internal Assign-Commands, var: {self.var}"
         )
 
-    def visit_cell_command(self, cell_cmd):
-        from .qi_jobs import cQiStore
+    def visit_cell_command(self, cell_cmd, *args, **kwargs):
+        from .qi_command import StoreCommand
 
-        if isinstance(cell_cmd, cQiStore):
+        if isinstance(cell_cmd, StoreCommand):
             if id(cell_cmd.store_var) == id(self.var):
-                self.raise_exception()
+                self._raise_exception()
 
-    def visit_context_manager(self, context_manager):
+    def visit_context_manager(self, context_manager, *args, **kwargs):
         for item in context_manager.body:
             item.accept(self)
 
-    def visit_if(self, if_cm):
+    def visit_if(self, if_cm, *args, **kwargs):
         for command in if_cm.body:
             command.accept(self)
 
-        for command in if_cm._else_body:
+        for command in if_cm.else_body:
             command.accept(self)
 
-    def visit_parallel(self, parallel_cm):
+    def visit_parallel(self, parallel_cm, *args, **kwargs):
         if self.var in parallel_cm._associated_variable_set:
             raise RuntimeError(
                 "Loop variable inside Parallel Context Manager might result in unexpected behaviour. "
                 "Please unroll loop or change variable."
             )
 
-    def visit_variable_command(self, variable_cmd):
-        pass
-
-    def visit_assign_command(self, assign_cmd):
+    def visit_assign_command(self, assign_cmd, *args, **kwargs):
         if id(assign_cmd.var) == id(self.var):
-            self.raise_exception()
-
-    def visit_sync_command(self, sync_cmd):
-        pass
+            self._raise_exception()
 
 
 class QiCmdVariableInspection(QiCommandVisitor):
@@ -166,12 +168,12 @@ class QiCmdVariableInspection(QiCommandVisitor):
 
     QiCMContainedCellVisitor needs to be run beforehand"""
 
-    def visit_cell_command(self, cell_cmd):
+    def visit_cell_command(self, cell_cmd, *args, **kwargs):
         for variable in cell_cmd._associated_variable_set:
             for cell in cell_cmd._relevant_cells:
                 self._add_cell_to_var(cell, variable)
 
-    def visit_context_manager(self, context_manager):
+    def visit_context_manager(self, context_manager, *args, **kwargs):
         # TODO does Else need to have the same relevant cells as If?
         for command in reversed(context_manager.body):
             command.accept(self)
@@ -180,27 +182,27 @@ class QiCmdVariableInspection(QiCommandVisitor):
             for cell in context_manager._relevant_cells:
                 self._add_cell_to_var(cell, variable)
 
-    def visit_if(self, if_cm):
+    def visit_if(self, if_cm, *args, **kwargs):
         # TODO does Else need to have the same relevant cells as If?
         for command in reversed(if_cm.body):
             command.accept(self)
 
-        for command in reversed(if_cm._else_body):
+        for command in reversed(if_cm.else_body):
             command.accept(self)
 
         for variable in if_cm._associated_variable_set:
             for cell in if_cm._relevant_cells:
                 self._add_cell_to_var(cell, variable)
 
-    def visit_parallel(self, parallel_cm):
+    def visit_parallel(self, parallel_cm, *args, **kwargs):
         for cmd_list in parallel_cm.entries:
             for cmd in reversed(cmd_list):
                 cmd.accept(self)
 
-    def visit_variable_command(self, variable_cmd):
+    def visit_variable_command(self, variable_cmd, *args, **kwargs):
         self.visit_cell_command(variable_cmd)
 
-    def visit_assign_command(self, assign_cmd):
+    def visit_assign_command(self, assign_cmd, *args, **kwargs):
         """assign_cmd.var is the destination variable. For every relevant cell of the variable, which were defined
         beforehand, the assign command is also relevant for the same cell.
 
@@ -214,11 +216,11 @@ class QiCmdVariableInspection(QiCommandVisitor):
             for variable in assign_cmd._associated_variable_set:
                 self._add_cell_to_var(cell, variable)
 
-    def visit_declare_command(self, declare_cmd):
+    def visit_declare_command(self, declare_cmd, *args, **kwargs):
         for cell in declare_cmd.var._relevant_cells:
             declare_cmd._relevant_cells.add(cell)
 
-    def visit_sync_command(self, sync_cmd):
+    def visit_sync_command(self, sync_cmd, *args, **kwargs):
         pass
 
     def _add_cell_to_var(self, cell, var):
@@ -240,20 +242,20 @@ class QiResultCollector(QiCommandVisitor):
 
         self.if_else_depth = 0
 
-    def visit_cell_command(self, cell_cmd):
-        from .qi_jobs import cQiRecording, cQiPlayReadout
+    def visit_cell_command(self, cell_cmd, *args, **kwargs):
+        from .qi_jobs import PlayReadoutCommand, RecordingCommand
 
-        if isinstance(cell_cmd, cQiPlayReadout) and cell_cmd.recording is not None:
+        if isinstance(cell_cmd, PlayReadoutCommand) and cell_cmd.recording is not None:
             cell_cmd = cell_cmd.recording
 
-        if isinstance(cell_cmd, cQiRecording):
+        if isinstance(cell_cmd, RecordingCommand):
             if self.if_else_depth > 0:
                 self.recording_in_if = True
 
             self.found_qi_results.add(cell_cmd.save_to)
             self.corresponding_recordings.add(cell_cmd)
 
-    def visit_if(self, if_cm):
+    def visit_if(self, if_cm, *args, **kwargs):
         self.if_else_depth += 1
 
         for cmd in if_cm.body:
@@ -264,11 +266,11 @@ class QiResultCollector(QiCommandVisitor):
 
         self.if_else_depth -= 1
 
-    def visit_parallel(self, parallel_cm):
+    def visit_parallel(self, parallel_cm, *args, **kwargs):
         for cmd in parallel_cm.body:
             cmd.accept(self)
 
-    def visit_for_range(self, for_range_cm):
+    def visit_for_range(self, for_range_cm, *args, **kwargs):
         for cmd in for_range_cm.body:
             cmd.accept(self)
 
@@ -278,54 +280,53 @@ class QiFindVarCmds(QiCommandVisitor):
 
     def __init__(self, var) -> None:
         self.requested_var = var
-        self.found_cmds: List[QiCommand] = []
+        self.found_cmds: list[QiCommand] = []
         self.calc_in_wait = False
 
-    def visit_cell_command(self, cell_cmd):
+    def visit_cell_command(self, cell_cmd, *args, **kwargs):
         """Add commands if the use QiTimeVariable. If variable is used in calculation in wait, it is registered in calc_in_wait"""
-        from .qi_jobs import _cQiPlay_base, cQiWait
+        from .qi_command import AnyPlayCommand, WaitCommand
         from .qi_var_definitions import _QiVariableBase
 
         if (
-            isinstance(cell_cmd, _cQiPlay_base)
-            and self.requested_var in cell_cmd._associated_variable_set
+            isinstance(cell_cmd, AnyPlayCommand)
+            and cell_cmd.is_variable_relevant(self.requested_var)
         ) or (
-            isinstance(cell_cmd, cQiWait)
+            isinstance(cell_cmd, WaitCommand)
             and isinstance(cell_cmd.length, _QiVariableBase)
             and cell_cmd.length.id == self.requested_var.id
         ):
             self.found_cmds.append(cell_cmd)
-        elif (
-            isinstance(cell_cmd, cQiWait)
-            and self.requested_var in cell_cmd._associated_variable_set
+        elif isinstance(cell_cmd, WaitCommand) and cell_cmd.is_variable_relevant(
+            self.requested_var
         ):
             self.found_cmds.append(cell_cmd)
             self.calc_in_wait = True
 
-    def visit_context_manager(self, context_manager):
+    def visit_context_manager(self, context_manager, *args, **kwargs):
         """Search for variable commands in context manager's bodies"""
         for command in context_manager.body:
             command.accept(self)
 
-    def visit_if(self, if_cm):
+    def visit_if(self, if_cm, *args, **kwargs):
         """Search for variable commands in context manager's bodies"""
         for command in if_cm.body:
             command.accept(self)
 
-        for command in if_cm._else_body:
+        for command in if_cm.else_body:
             command.accept(self)
 
-    def visit_parallel(self, parallel_cm):
+    def visit_parallel(self, parallel_cm, *args, **kwargs):
         """Avoid multiple additions to list, if multiple commands use self.requested_var"""
         for command in parallel_cm.body:
             if self.requested_var in command._associated_variable_set:
                 self.found_cmds.append(command)
                 return
 
-    def visit_variable_command(self, variable_cmd):
+    def visit_variable_command(self, variable_cmd, *args, **kwargs):
         pass
 
-    def visit_sync_command(self, sync_cmd):
+    def visit_sync_command(self, sync_cmd, *args, **kwargs):
         pass
 
 
@@ -350,29 +351,29 @@ class QiJobVisitor(QiCommandVisitor, QiExpressionVisitor):
     """Visitor over every program construct in qicode.
     Visits all commands, expressions and conditions."""
 
-    def visit_cell_command(self, cell_cmd):
-        from .qi_jobs import cQiWait, _cQiPlay_base, cQiRecording
+    def visit_cell_command(self, cell_cmd, *args, **kwargs):
+        from .qi_command import AnyPlayCommand, RecordingCommand, WaitCommand
         from .qi_var_definitions import QiExpression
 
-        if isinstance(cell_cmd, cQiWait):
+        if isinstance(cell_cmd, WaitCommand):
             if isinstance(cell_cmd._length, QiExpression):
                 cell_cmd._length.accept(self)
 
-        elif isinstance(cell_cmd, _cQiPlay_base):
+        elif isinstance(cell_cmd, AnyPlayCommand):
             if isinstance(cell_cmd.pulse.length, QiExpression):
                 cell_cmd.pulse._length.accept(self)
 
-        elif isinstance(cell_cmd, cQiRecording):
+        elif isinstance(cell_cmd, RecordingCommand):
             if isinstance(cell_cmd.var, QiExpression):
                 cell_cmd.var.accept(self)
             if isinstance(cell_cmd._length, QiExpression):
                 cell_cmd._length.accept(self)
 
-    def visit_context_manager(self, context_manager):
+    def visit_context_manager(self, context_manager, *args, **kwargs):
         for cmd in context_manager.body:
             cmd.accept(self)
 
-    def visit_if(self, if_cm):
+    def visit_if(self, if_cm, *args, **kwargs):
         if_cm.condition.accept(self)
 
         for cmd in if_cm.body:
@@ -381,25 +382,25 @@ class QiJobVisitor(QiCommandVisitor, QiExpressionVisitor):
         for cmd in if_cm._else_body:
             cmd.accept(self)
 
-    def visit_parallel(self, parallel_cm):
+    def visit_parallel(self, parallel_cm, *args, **kwargs):
         self.visit_context_manager(parallel_cm)
 
-    def visit_for_range(self, for_range_cm):
+    def visit_for_range(self, for_range_cm, *args, **kwargs):
         self.visit_context_manager(for_range_cm)
 
-    def visit_variable_command(self, variable_cmd):
-        from .qi_jobs import cQiAssign
+    def visit_variable_command(self, variable_cmd, *args, **kwargs):
+        from .qi_command import AssignCommand
 
-        if isinstance(variable_cmd, cQiAssign):
+        if isinstance(variable_cmd, AssignCommand):
             variable_cmd.value.accept(self)
 
-    def visit_assign_command(self, assign_cmd):
+    def visit_assign_command(self, assign_cmd, *args, **kwargs):
         self.visit_variable_command(assign_cmd)
 
-    def visit_declare_command(self, declare_cmd):
+    def visit_declare_command(self, declare_cmd, *args, **kwargs):
         self.visit_variable_command(declare_cmd)
 
-    def visit_sync_command(self, sync_cmd):
+    def visit_sync_command(self, sync_cmd, *args, **kwargs):
         pass
 
     def visit_variable(self, var):
@@ -423,7 +424,7 @@ class QiJobVisitor(QiCommandVisitor, QiExpressionVisitor):
 
 
 class StringFunctionPatcher:
-    orig_map: Dict[Type[Any], Callable] = {}
+    orig_map: ClassVar[dict[type[Any], Callable]] = {}
 
     def _replace_str_func(self, klass, orig_func, new_func):
         self.orig_map[klass] = orig_func
@@ -449,8 +450,8 @@ class StringFunctionPatcher:
         def wrapper(*args, **kwargs):
             from .qi_jobs import (
                 QiCell,
-                _QiVariableBase,
                 QiCellProperty,
+                _QiVariableBase,
             )
 
             # Fall back to just executing if patching already happened
@@ -460,7 +461,7 @@ class StringFunctionPatcher:
             try:
                 # Patch __str__ functions, keeping originals
                 self._replace_str_func(
-                    QiCell, QiCell.__str__, lambda x: f"q[{x.cellID}]"
+                    QiCell, QiCell.__str__, lambda x: f"q[{x.cell_id}]"
                 )
 
                 self._replace_str_func(
@@ -492,7 +493,7 @@ class QiStringifyJob(QiCommandVisitor):
 
     def __init__(self) -> None:
         super().__init__()
-        self.strings: List[str] = []
+        self.strings: list[str] = []
         self.indent_level = 0
 
     def _add_string(self, string: str):
@@ -506,26 +507,21 @@ class QiStringifyJob(QiCommandVisitor):
 
     @str_patcher.patch_str
     def visit_cell_command(self, cell_cmd):
-        from .qi_jobs import cQiPlayReadout
+        from .qi_command import PlayReadoutCommand
 
         self._add_string(cell_cmd._stringify())
-        if isinstance(cell_cmd, cQiPlayReadout):
-            # Handle cQiRecording commands "hidden" by cQiPlayReadout
+        if isinstance(cell_cmd, PlayReadoutCommand):
+            # Handle RecordingCommand commands "hidden" by PlayReadoutCommand
             if cell_cmd.recording is not None:
                 self.visit_cell_command(cell_cmd.recording)
 
-    def visit_context_manager(self, context_manager):
-        from .qi_jobs import QiContextManager
-
-        if isinstance(context_manager, QiContextManager):
-            context_manager = context_manager.body
-
+    def visit_context_manager(self, context_manager, *args, **kwargs):
         self.indent_level += 1
         for command in context_manager:
             command.accept(self)
         self.indent_level -= 1
 
-    def visit_if(self, if_cm):
+    def visit_if(self, if_cm, *args, **kwargs):
         # Only wrap the actual "If" with str patching
         @self.str_patcher.patch_str
         def _addIf(self):
@@ -538,12 +534,12 @@ class QiStringifyJob(QiCommandVisitor):
             self._add_string("Else:")
             self.visit_context_manager(if_cm._else_body)
 
-    def visit_parallel(self, parallel_cm):
+    def visit_parallel(self, parallel_cm, *args, **kwargs):
         for block in parallel_cm.entries:
             self._add_string(parallel_cm._stringify() + ":")
             self.visit_context_manager(block)
 
-    def visit_for_range(self, for_range_cm):
+    def visit_for_range(self, for_range_cm, *args, **kwargs):
         # Only wrap the actual "ForRange" with str patching
         @self.str_patcher.patch_str
         def _addFor(self):
@@ -552,16 +548,11 @@ class QiStringifyJob(QiCommandVisitor):
         _addFor(self)
         self.visit_context_manager(for_range_cm)
 
-    def visit_variable_command(self, variable_cmd):
-        raise NotImplementedError(
-            f"Stringify: Unknown variable command {repr(variable_cmd)}"
-        )
-
     @str_patcher.patch_str
     def visit_assign_command(self, assign_cmd):
         self._add_string(assign_cmd._stringify())
 
-    def visit_declare_command(self, declare_cmd):
+    def visit_declare_command(self, declare_cmd, *args, **kwargs):
         self._add_string(declare_cmd._stringify())
 
     @str_patcher.patch_str

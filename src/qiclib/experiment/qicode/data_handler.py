@@ -13,10 +13,13 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-from collections import defaultdict
-import numpy as np
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import List, Optional, Callable, Dict, TYPE_CHECKING, Tuple, Any
+from collections import defaultdict
+from typing import TYPE_CHECKING, Any, Callable
+
+import numpy as np
 
 from .data_provider import DataProvider
 
@@ -39,7 +42,7 @@ class DataHandler(ABC):
 
     @staticmethod
     def _data_handler_factories() -> (
-        Dict[str, Callable[[DataProvider, List["QiCell"], int], "DataHandler"]]
+        dict[str, Callable[[DataProvider, list[QiCell], int], DataHandler]]
     ):
         """
         This is a method instead of a static variable, because forward references to the subclasses are not possible in
@@ -49,9 +52,9 @@ class DataHandler(ABC):
             "average": lambda data_provider, cell_list, averages: _DefaultDataHandler(
                 data_provider, cell_list
             ),
-            "amp_pha": lambda data_provider, cell_list, averages: _AmplitudePhaseDataHandler(
-                data_provider, cell_list
-            ),
+            "amp_pha": lambda data_provider,
+            cell_list,
+            averages: _AmplitudePhaseDataHandler(data_provider, cell_list),
             "iqcloud": lambda data_provider, cell_list, averages: _IQCloudDataHandler(
                 data_provider, cell_list
             ),
@@ -62,12 +65,12 @@ class DataHandler(ABC):
             "counts": lambda data_provider, cell_list, averages: _CountDataHandler(
                 data_provider, cell_list
             ),
-            "quantum_jumps": lambda data_provider, cell_list, averages: _QuantumJumpsDataHandler(
-                data_provider, cell_list
-            ),
-            "custom": lambda data_provider, cell_list, averages: _NotImplementedDataHandler(
-                data_provider, cell_list
-            ),
+            "quantum_jumps": lambda data_provider,
+            cell_list,
+            averages: _QuantumJumpsDataHandler(data_provider, cell_list),
+            "custom": lambda data_provider,
+            cell_list,
+            averages: _NotImplementedDataHandler(data_provider, cell_list),
         }
 
     @staticmethod
@@ -77,7 +80,7 @@ class DataHandler(ABC):
     @classmethod
     def get_factory_by_name(
         cls, name: str
-    ) -> Optional[Callable[[DataProvider, List["QiCell"], int], "DataHandler"]]:
+    ) -> Callable[[DataProvider, list[QiCell], int], DataHandler] | None:
         factories = DataHandler._data_handler_factories()
         if name not in factories:
             return None
@@ -85,13 +88,13 @@ class DataHandler(ABC):
 
     @classmethod
     def get_custom_wrapper_factory(
-        cls, custom_data_handler: Callable[[List["QiCell"], DataProvider], None]
-    ) -> Callable[[DataProvider, List["QiCell"], int], "DataHandler"]:
+        cls, custom_data_handler: Callable[[list[QiCell], DataProvider], None]
+    ) -> Callable[[DataProvider, list[QiCell], int], DataHandler]:
         return lambda data_provider, cell_list, averages: _CustomDataHandlerWrapper(
             data_provider, cell_list, custom_data_handler
         )
 
-    def __init__(self, data_provider: DataProvider, cell_list: List["QiCell"]):
+    def __init__(self, data_provider: DataProvider, cell_list: list[QiCell]):
         self.data_provider = data_provider
         self.cell_list = cell_list
 
@@ -109,17 +112,17 @@ class _StandardDataHandler(DataHandler):
             self.process_cell_results(cell_index, cell, count)
 
     @abstractmethod
-    def process_cell_results(self, cell_index: int, cell: "QiCell", count: int):
+    def process_cell_results(self, cell_index: int, cell: QiCell, count: int):
         pass
 
 
 class _DefaultDataHandler(_StandardDataHandler):
-    def process_cell_results(self, cell_index: int, cell: "QiCell", count: int):
-        distributed_result: Dict["QiResult", Tuple[List[Any], List[Any]]] = defaultdict(
+    def process_cell_results(self, cell_index: int, cell: QiCell, count: int):
+        distributed_result: dict[QiResult, tuple[list[Any], list[Any]]] = defaultdict(
             lambda: ([], [])
         )
         for i in range(count):
-            box: "QiResult" = cell._result_recording_order[i]
+            box: QiResult = cell._result_recording_order[i]
 
             distributed_result[box][0].append(
                 self.data_provider.get_default_i(cell_index, i)
@@ -136,12 +139,12 @@ class _DefaultDataHandler(_StandardDataHandler):
 
 
 class _AmplitudePhaseDataHandler(_StandardDataHandler):
-    def process_cell_results(self, cell_index: int, cell: "QiCell", count: int):
-        distributed_result: Dict["QiResult", Tuple[List[Any], List[Any]]] = defaultdict(
+    def process_cell_results(self, cell_index: int, cell: QiCell, count: int):
+        distributed_result: dict[QiResult, tuple[list[Any], list[Any]]] = defaultdict(
             lambda: ([], [])
         )
         for i in range(count):
-            box: "QiResult" = cell._result_recording_order[i]
+            box: QiResult = cell._result_recording_order[i]
 
             distributed_result[box][0].append(
                 self.data_provider.get_amp_pha_i(cell_index, i)
@@ -158,9 +161,9 @@ class _AmplitudePhaseDataHandler(_StandardDataHandler):
 
 
 class _RawDataHandler(_StandardDataHandler):
-    def process_cell_results(self, cell_index: int, cell: "QiCell", count: int):
+    def process_cell_results(self, cell_index: int, cell: QiCell, count: int):
         # Only one box relevant in raw mode (the one of last recording)
-        box: "QiResult" = cell._result_recording_order[-1]
+        box: QiResult = cell._result_recording_order[-1]
         box.data = [
             np.array(self.data_provider.get_raw_i(cell_index), dtype=np.float64),
             np.array(self.data_provider.get_raw_q(cell_index), dtype=np.float64),
@@ -168,12 +171,12 @@ class _RawDataHandler(_StandardDataHandler):
 
 
 class _IQCloudDataHandler(_StandardDataHandler):
-    def process_cell_results(self, cell_index: int, cell: "QiCell", count: int):
-        distributed_result = defaultdict(lambda: [])
+    def process_cell_results(self, cell_index: int, cell: QiCell, count: int):
+        distributed_result: dict[QiResult, list] = defaultdict(list)
         for i in range(count):
-            box: "QiResult" = cell._result_recording_order[i]
+            box: QiResult = cell._result_recording_order[i]
 
-            distributed_result[box].append(
+            distributed_result[box].extend(
                 (
                     self.data_provider.get_iq_cloud_i(cell_index, i, count),
                     self.data_provider.get_iq_cloud_q(cell_index, i, count),
@@ -186,12 +189,12 @@ class _IQCloudDataHandler(_StandardDataHandler):
 
 class _StateDataHandler(_StandardDataHandler):
     def __init__(
-        self, data_provider: DataProvider, cell_list: List["QiCell"], averages: int
+        self, data_provider: DataProvider, cell_list: list[QiCell], averages: int
     ):
         super().__init__(data_provider, cell_list)
         self.averages = averages
 
-    def process_cell_results(self, cell_index: int, cell: "QiCell", count: int):
+    def process_cell_results(self, cell_index: int, cell: QiCell, count: int):
         # Each data box contains the states obtained from one cell
         # States are compressed as 3bits in 32bit unsigned integers
         data = [
@@ -202,12 +205,12 @@ class _StateDataHandler(_StandardDataHandler):
             0 : self.averages  # Last value maybe only partially filled
         ]
         # There has to be only exactly one box.
-        box: "QiResult" = cell._result_recording_order[0]
+        box: QiResult = cell._result_recording_order[0]
         box.data = data
 
 
 class _CountDataHandler(_StandardDataHandler):
-    def process_cell_results(self, cell_index: int, cell: "QiCell", count: int):
+    def process_cell_results(self, cell_index: int, cell: QiCell, count: int):
         digits = sum(cell.get_number_of_recordings() > 0 for cell in self.cell_list)
         counts = {
             f"{i:0{digits}b}": count
@@ -216,12 +219,12 @@ class _CountDataHandler(_StandardDataHandler):
         # We store the same result in all cells that contributed
         # This mode counts the result of last executed recording.
         # Earlier recordings are ignored
-        box: "QiResult" = cell._result_recording_order[-1]
+        box: QiResult = cell._result_recording_order[-1]
         box.data = counts
 
 
 class _QuantumJumpsDataHandler(_StandardDataHandler):
-    def process_cell_results(self, cell_index: int, cell: "QiCell", count: int):
+    def process_cell_results(self, cell_index: int, cell: QiCell, count: int):
         print(
             '\033[93m WARNING:\033[00m The data collection mode "quantum_jumps" has not yet been tested with '
             "a real qubit."
@@ -239,8 +242,8 @@ class _CustomDataHandlerWrapper(DataHandler):
     def __init__(
         self,
         data_provider,
-        cell_list: List["QiCell"],
-        custom_data_handler: Callable[[List["QiCell"], DataProvider], None],
+        cell_list: list[QiCell],
+        custom_data_handler: Callable[[list[QiCell], DataProvider], None],
     ):
         super().__init__(data_provider, cell_list)
         self.custom_data_handler = custom_data_handler
