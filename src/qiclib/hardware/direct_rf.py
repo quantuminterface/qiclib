@@ -13,13 +13,15 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+from __future__ import annotations
 
 import abc
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
+
+import google.protobuf.wrappers_pb2 as wrappers
 
 import qiclib.packages.grpc.direct_rf_pb2 as dt
 import qiclib.packages.grpc.direct_rf_pb2_grpc as grpc_stub
-from qiclib.hardware.direct_rf_addon import AdcChannel, DacChannel
 from qiclib.hardware.platform_component import PlatformComponent
 from qiclib.hardware.rfdc import ADC, DAC
 
@@ -30,7 +32,7 @@ if TYPE_CHECKING:
 class _Channel(abc.ABC):
     def __init__(
         self,
-        controller: "QiController",
+        controller: QiController,
         stub: grpc_stub.DirectRfServiceStub,
         channel: int,
         index: dt.ConverterIndex,  # type: ignore
@@ -52,7 +54,7 @@ class _Channel(abc.ABC):
 
     @property
     def attenuation(self) -> float:
-        return self._stub.GetAttenuation(self._index)
+        return self._stub.GetAttenuation(self._index).value
 
     @attenuation.setter
     def attenuation(self, new_value: float):
@@ -62,7 +64,7 @@ class _Channel(abc.ABC):
 class OutputChannel(_Channel):
     def __init__(
         self,
-        controller: "QiController",
+        controller: QiController,
         stub: grpc_stub.DirectRfServiceStub,
         channel: int,
     ) -> None:
@@ -79,15 +81,43 @@ class OutputChannel(_Channel):
         return self._controller.rfdc.dac(index.tile, index.block)
 
     @property
-    def board_channel(self) -> DacChannel:
-        index = self._stub.ToChannelIndex(self._index)
-        return self._controller.direct_rf_board.dac(index.value)
+    def analog_data_path(self) -> str:
+        setting = self._stub.GetDacAnalogDataPath(
+            wrappers.UInt32Value(value=self._channel)
+        ).setting
+        return {
+            dt.DacAnalogPath.Setting.OFF: "off",
+            dt.DacAnalogPath.Setting.NYQUIST_1: "nz1",
+            dt.DacAnalogPath.Setting.NYQUIST_2: "nz2",
+            dt.DacAnalogPath.Setting.DC: "dc",
+        }[setting]
+
+    @analog_data_path.setter
+    def analog_data_path(
+        self, new_value: Literal["off", "nz1", "nz2", "dc"] | Literal[1, 2]
+    ):
+        if new_value == 1:
+            setting = dt.DacAnalogPath.Setting.NYQUIST_1
+        elif new_value == 2:
+            setting = dt.DacAnalogPath.Setting.NYQUIST_2
+        else:
+            if isinstance(new_value, int):
+                raise ValueError(f"Nyquist zone must be 0 or 1, was {new_value}")
+            setting = {
+                "off": dt.DacAnalogPath.Setting.OFF,
+                "nz1": dt.DacAnalogPath.Setting.NYQUIST_1,
+                "nz2": dt.DacAnalogPath.Setting.NYQUIST_2,
+                "dc": dt.DacAnalogPath.Setting.DC,
+            }[new_value.lower()]
+        self._stub.SetDacAnalogDataPath(
+            dt.DacAnalogPath(index=self._index.index, setting=setting)
+        )
 
 
 class InputChannel(_Channel):
     def __init__(
         self,
-        controller: "QiController",
+        controller: QiController,
         stub: grpc_stub.DirectRfServiceStub,
         channel: int,
     ) -> None:
@@ -104,14 +134,49 @@ class InputChannel(_Channel):
         return self._controller.rfdc.adc(index.tile, index.block)
 
     @property
-    def board_channel(self) -> AdcChannel:
-        index = self._stub.ToChannelIndex(self._index)
-        return self._controller.direct_rf_board.adc(index.value)
+    def analog_data_path(self) -> str:
+        setting = self._stub.GetAdcAnalogDataPath(
+            wrappers.UInt32Value(value=self._channel)
+        ).setting
+        return {
+            dt.AdcAnalogPath.Setting.OFF: "off",
+            dt.AdcAnalogPath.Setting.NYQUIST_1: "nz1",
+            dt.AdcAnalogPath.Setting.NYQUIST_2: "nz2",
+            dt.AdcAnalogPath.Setting.NYQUIST_6: "nz6",
+            dt.AdcAnalogPath.Setting.NYQUIST_7: "nz7",
+        }[setting]
+
+    @analog_data_path.setter
+    def analog_data_path(
+        self,
+        new_value: Literal["off", "nz1", "nz2", "nz6", "nz7"] | Literal[1, 2, 6, 7],
+    ):
+        if new_value == 1:
+            setting = dt.AdcAnalogPath.Setting.NYQUIST_1
+        elif new_value == 2:
+            setting = dt.AdcAnalogPath.Setting.NYQUIST_2
+        elif new_value == 6:
+            setting = dt.AdcAnalogPath.Setting.NYQUIST_6
+        elif new_value == 7:
+            setting = dt.AdcAnalogPath.Setting.NYQUIST_7
+        else:
+            if isinstance(new_value, int):
+                raise ValueError(f"Nyquist zone must be 1, 2, 6, or 7, was {new_value}")
+            setting = {
+                "off": dt.AdcAnalogPath.Setting.OFF,
+                "nz1": dt.AdcAnalogPath.Setting.NYQUIST_1,
+                "nz2": dt.AdcAnalogPath.Setting.NYQUIST_2,
+                "nz6": dt.AdcAnalogPath.Setting.NYQUIST_6,
+                "nz7": dt.AdcAnalogPath.Setting.NYQUIST_7,
+            }[new_value.lower()]
+        self._stub.SetAdcAnalogDataPath(
+            dt.AdcAnalogPath(index=self._index.index, setting=setting)
+        )
 
 
 class DirectRf(PlatformComponent):
     def __init__(
-        self, name: str, connection, controller: "QiController", qkit_instrument=False
+        self, name: str, connection, controller: QiController, qkit_instrument=False
     ):
         super().__init__(name, connection, controller, qkit_instrument)
         self._stub = grpc_stub.DirectRfServiceStub(self._conn.channel)

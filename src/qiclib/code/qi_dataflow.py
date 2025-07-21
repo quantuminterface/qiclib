@@ -381,6 +381,9 @@ class DataflowVisitor:
     def visit_for_range(self, for_range_cm, input, node):
         return input
 
+    def visit_while(self, while_cm, input, node):
+        return input
+
     def visit_variable_command(self, variable_cmd, input, node):
         return input
 
@@ -500,10 +503,10 @@ class FlatLatticeValue(DataflowValue):
         return cls(FlatLatticeValue.Type.NO_CONST, None)
 
     @classmethod
-    def value(cls, value: QiExpression):
-        assert isinstance(
-            value, QiExpression
-        ), f"Expected expression but got {value} of type {type(value)}"
+    def of_value(cls, value: QiExpression):
+        assert isinstance(value, QiExpression), (
+            f"Expected expression but got {value} of type {type(value)}"
+        )
         return cls(FlatLatticeValue.Type.VALUE, value)
 
     def merge(self, other):
@@ -610,6 +613,12 @@ class CellValues(DataflowValue):
             ):
                 result.values[cell] = FlatLatticeValue.no_const()
 
+        return result
+
+    def invalidate_all(self):
+        result = copy(self)
+        for cell in result.values:
+            result.values[cell] = FlatLatticeValue.no_const()
         return result
 
     def __copy__(self):

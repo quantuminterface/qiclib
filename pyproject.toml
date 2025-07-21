@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 [build-system]
-requires = ["hatchling>=1.25", "hatch-vcs>=0.4", "grpcio-tools==1.66.1"]
+requires = ["hatchling>=1.25", "hatch-vcs>=0.4", "grpcio-tools==1.73.1"]
 build-backend = "hatchling.build"
 
 [project]
@@ -31,13 +31,13 @@ dependencies = [
     "matplotlib>=3.7",
     "ipywidgets>=8.1",
     "wrapt>=1.16",
+    "lmfit>=1.3",
+    "tqdm>=4.67.1",
     # `grpcio`, `grpcio-tools` and `protobuf` should always get exact version
     # numbers to prevent mismatches between the generated protobuf version
     # and runtime protobuf version
-    "grpcio==1.66.1",
-    "protobuf==5.27.2",
-    "lmfit>=1.3",
-    "tqdm>=4.67.1",
+    "grpcio==1.73.1",
+    "protobuf==6.31.1",
 ]
 requires-python = ">= 3.9"
 classifiers = [
@@ -92,12 +92,8 @@ show_missing = true
 skip_empty = true
 
 [tool.hatch.build.hooks.custom]
-path = 'build_protos.py'
-# protos_root points to the directory that
-# a) The `ipe_servicehub_protos` submodule can be found
-# b) The `proto_files.txt` file can be found that lists installable proto files
-# c) The generated protobuf files should be installed to
-protos_root = "src/qiclib/packages/grpc"
+path = "src/qiclib/packages/grpc/ipe_servicehub_protos/build_protos.py"
+out_dir = "src/qiclib/packages/grpc/"
 
 [tool.hatch.version]
 source = "vcs"
@@ -121,7 +117,7 @@ dev = [
     "pytest-cov>=5.0.0",
     "pytest>=8.3.3",
     "sphinx>=7.1.2",
-    "ruff>=0.8.3",
+    "ruff>=0.11.3",
     "furo>=2024.8.6",
     "livereload>=2.7.1",
 ]

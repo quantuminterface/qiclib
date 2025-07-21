@@ -94,7 +94,7 @@ def calibrate_readout(
 
         plt.plot(np.arange(len(raw_sig)), raw_sig, label=label_i)
         plt.plot(np.arange(len(raw_ref)), raw_ref, label=label_q)
-        plt.title(f"Recording window preview at {max_offset*1e9:.1f}ns offset")
+        plt.title(f"Recording window preview at {max_offset * 1e9:.1f}ns offset")
         plt.xlabel("Recording time (ns)")
         plt.ylabel("ADC signal level (arb. unit)")
         plt.legend()
@@ -159,7 +159,7 @@ def calibrate_electrical_delay(
             " connected right?"
         )
 
-    print(f"Optimal offset: {max_offset*1e9:.1f} ns")
+    print(f"Optimal offset: {max_offset * 1e9:.1f} ns")
     if set_sample:
         sample[cell]["rec_offset"] = max_offset
 
@@ -198,7 +198,7 @@ def check_sidebands(qic: QiController, sample: QiSample, averages: int, cell: in
     print(f"Mirror sideband is {amp_factor:.1f} dB suppressed at recording input")
     if amp_factor < 5:
         sys.stderr.write(
-            f"Mirror sideband is {-1*amp_factor} dB stronger than the actual signal at"
+            f"Mirror sideband is {-1 * amp_factor} dB stronger than the actual signal at"
             " the recording input. Are maybe I and Q components swapped at the mixer?"
         )
     return amp_factor

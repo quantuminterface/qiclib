@@ -17,7 +17,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 import numpy as np
 
@@ -40,57 +41,55 @@ class DataHandler(ABC):
     :param cell_list: to store processed results there
     """
 
+    class Factory(Protocol):
+        def __call__(
+            self, data_provider: DataProvider, cell_list: list[QiCell], averages: int
+        ) -> DataHandler: ...
+
     @staticmethod
-    def _data_handler_factories() -> (
-        dict[str, Callable[[DataProvider, list[QiCell], int], DataHandler]]
-    ):
+    def _data_handler_factories() -> dict[str, DataHandler.Factory]:
         """
         This is a method instead of a static variable, because forward references to the subclasses are not possible in
         static variable assignments.
         """
         return {
-            "average": lambda data_provider, cell_list, averages: _DefaultDataHandler(
+            "average": lambda data_provider, cell_list, _: _DefaultDataHandler(
                 data_provider, cell_list
             ),
-            "amp_pha": lambda data_provider,
-            cell_list,
-            averages: _AmplitudePhaseDataHandler(data_provider, cell_list),
-            "iqcloud": lambda data_provider, cell_list, averages: _IQCloudDataHandler(
+            "amp_pha": lambda data_provider, cell_list, _: _AmplitudePhaseDataHandler(
                 data_provider, cell_list
             ),
-            "raw": lambda data_provider, cell_list, averages: _RawDataHandler(
+            "iqcloud": lambda data_provider, cell_list, _: _IQCloudDataHandler(
+                data_provider, cell_list
+            ),
+            "raw": lambda data_provider, cell_list, _: _RawDataHandler(
                 data_provider, cell_list
             ),
             "states": _StateDataHandler,
-            "counts": lambda data_provider, cell_list, averages: _CountDataHandler(
+            "counts": lambda data_provider, cell_list, _: _CountDataHandler(
                 data_provider, cell_list
             ),
             "quantum_jumps": lambda data_provider,
             cell_list,
-            averages: _QuantumJumpsDataHandler(data_provider, cell_list),
-            "custom": lambda data_provider,
-            cell_list,
-            averages: _NotImplementedDataHandler(data_provider, cell_list),
+            _: _QuantumJumpsDataHandler(data_provider, cell_list),
+            "custom": lambda data_provider, cell_list, _: _NotImplementedDataHandler(
+                data_provider, cell_list
+            ),
         }
 
     @staticmethod
-    def names():
+    def names() -> Iterator[str]:
         return DataHandler._data_handler_factories().keys()
 
     @classmethod
-    def get_factory_by_name(
-        cls, name: str
-    ) -> Callable[[DataProvider, list[QiCell], int], DataHandler] | None:
-        factories = DataHandler._data_handler_factories()
-        if name not in factories:
-            return None
-        return factories[name]
+    def get_factory_by_name(cls, name: str) -> DataHandler.Factory | None:
+        return DataHandler._data_handler_factories().get(name)
 
     @classmethod
     def get_custom_wrapper_factory(
         cls, custom_data_handler: Callable[[list[QiCell], DataProvider], None]
-    ) -> Callable[[DataProvider, list[QiCell], int], DataHandler]:
-        return lambda data_provider, cell_list, averages: _CustomDataHandlerWrapper(
+    ) -> DataHandler.Factory:
+        return lambda data_provider, cell_list, _: _CustomDataHandlerWrapper(
             data_provider, cell_list, custom_data_handler
         )
 
@@ -113,7 +112,13 @@ class _StandardDataHandler(DataHandler):
 
     @abstractmethod
     def process_cell_results(self, cell_index: int, cell: QiCell, count: int):
-        pass
+        """
+        Process the result of one cell, assigning values to the `cell`
+
+        :param cell_index: Index of the cell
+        :param cell: The QiCell to assign the result to
+        :param count: The number of recordings
+        """
 
 
 class _DefaultDataHandler(_StandardDataHandler):
@@ -176,15 +181,17 @@ class _IQCloudDataHandler(_StandardDataHandler):
         for i in range(count):
             box: QiResult = cell._result_recording_order[i]
 
-            distributed_result[box].extend(
-                (
-                    self.data_provider.get_iq_cloud_i(cell_index, i, count),
-                    self.data_provider.get_iq_cloud_q(cell_index, i, count),
+            distributed_result[box].append(
+                np.stack(
+                    (
+                        self.data_provider.get_iq_cloud_i(cell_index, i, count),
+                        self.data_provider.get_iq_cloud_q(cell_index, i, count),
+                    ),
                 )
             )
 
         for box, values in distributed_result.items():
-            box.data = values
+            box.data = np.asarray(values).swapaxes(0, 1).squeeze()
 
 
 class _StateDataHandler(_StandardDataHandler):

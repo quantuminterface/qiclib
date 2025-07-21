@@ -22,6 +22,13 @@ from typing import Callable
 
 import numpy as np
 
+import qiclib
+import qiclib.packages.grpc.datatypes_pb2 as dt
+import qiclib.packages.grpc.digital_trigger_pb2 as digital_trigger_proto
+import qiclib.packages.grpc.pulse_player_pb2 as pulse_player_proto
+import qiclib.packages.grpc.pulsegen_pb2 as pulsegen_proto
+import qiclib.packages.grpc.qic_unitcell_pb2 as unitcell_proto
+import qiclib.packages.grpc.sequencer_pb2 as sequencer_proto
 from qiclib.code.qi_jobs import QiCell, QiCoupler
 from qiclib.code.qi_pulse import QiPulse
 from qiclib.code.qi_sequencer import ForRangeEntry, Sequencer
@@ -94,9 +101,7 @@ class QiCodeExperiment(BaseExperiment):
         self._var_reg_map = var_reg_map
         self._data_collection = data_collection
         self.use_taskrunner = use_taskrunner
-        self._data_handler_factory: (
-            Callable[[DataProvider, list[QiCell], int], DataHandler] | None
-        ) = None
+        self._data_handler_factory: DataHandler.Factory | None = None
 
         self._job_representation = "Unknown QiCodeExperiment"
 
@@ -525,6 +530,154 @@ class QiCodeExperiment(BaseExperiment):
                     pass
 
         return result
+
+    def _pulse_to_grpc_pulse(self, triggerset, pulse):
+        envelope = pulse(samplerate)
+        # check if holding the last value of the amplitude array.
+        hold = pulse.is_variable_length or pulse.hold
+
+        if len(envelope) % 4 != 0:
+            # adds fill values to the end of the pulse if its not multiple of 4
+            fill = envelope[-1] if hold else 0.0
+            envelope = np.append(envelope, [fill] * (4 - len(envelope) % 4))
+
+        # If phase is a constant phase = pulse.phase, otherwise phase = 0
+        if isinstance(pulse.phase, _QiVariableBase):
+            phase = 0
+        else:
+            phase = pulse.phase
+
+        pulseform_i = np.real(envelope)
+        pulseform_q = np.imag(envelope)
+        if not np.any(pulseform_q):
+            # No imaginary part present, so only real envelope
+            pulseform_q = []
+        return pulsegen_proto.Pulse(
+            index=pulsegen_proto.IndexSet(
+                cindex=dt.EndpointIndex(value=0),
+                tindex=pulsegen_proto.TriggerSetIndex(value=triggerset + 1),
+            ),
+            i=pulseform_i,
+            q=pulseform_q,
+            phase=phase,
+            offset=0,
+            hold=hold,
+            shift_phase=pulse.shift_phase,
+        )
+
+    def to_protobuf(self) -> unitcell_proto.Job:
+        job = unitcell_proto.Job()
+        for idx, cell in enumerate(self.cell_list):
+            if len(cell.readout_pulses) > 13:
+                raise RuntimeError(
+                    "Number of readouts exceeded 13. Your program uses too many different pulses."
+                )
+
+            cell_config = unitcell_proto.CellConfig(
+                index=dt.EndpointIndex(value=self.cell_map[idx])
+            )
+            readout_config = cell_config.readout_config
+            choke_pulse_added = False
+            for triggerset, pulse in enumerate(cell.readout_pulses):
+                readout_config.pulses.append(
+                    self._pulse_to_grpc_pulse(triggerset, pulse)
+                )
+                if pulse.is_variable_length and not choke_pulse_added:
+                    # special pulse to end a parametrized readout
+                    readout_config.pulses.append(
+                        self._pulse_to_grpc_pulse(
+                            Sequencer.CHOKE_PULSE_INDEX,
+                            QiPulse(length=4e-9, amplitude=0),
+                        )
+                    )
+                    choke_pulse_added = True
+
+            readout_config.readout_frequency = cell.initial_readout_frequency
+            readout_config.recording_frequency = cell.initial_readout_frequency
+            readout_config.recording_duration = cell.recording_length
+            readout_config.recording_offset = cell.initial_recording_offset
+
+            drive_config = cell_config.drive_config
+            if len(cell.manipulation_pulses) > 13:
+                raise RuntimeError(
+                    "Number of pulses exceeded 13. Your program uses too many different pulses."
+                )
+
+            choke_pulse_added = False
+            for triggerset, pulse in enumerate(cell.manipulation_pulses):
+                drive_config.pulses.append(self._pulse_to_grpc_pulse(triggerset, pulse))
+                if pulse.is_variable_length:
+                    # special pulse to end a parametrized readout
+                    drive_config.pulses.append(
+                        self._pulse_to_grpc_pulse(
+                            Sequencer.CHOKE_PULSE_INDEX,
+                            QiPulse(length=4e-9, amplitude=0),
+                        )
+                    )
+                    choke_pulse_added = True
+
+            drive_config.frequency = cell.initial_manipulation_frequency
+
+            digital_trigger_config = cell_config.digital_trigger_config
+            for index, trig_set in enumerate(cell.digital_trigger_sets):
+                duration = qiclib.packages.utility.conv_time_to_cycles(
+                    trig_set.duration
+                )
+                # In the array, triggers are indexed starting from 0. However, index 0 is reserved and cannot be used.
+                # Therefore, we start at index # 1. This is also accounted for in QiCell.add_digital_trigger()
+                digital_trigger_config.trigger_sets.append(
+                    digital_trigger_proto.IndexedTriggerSet(
+                        index=digital_trigger_proto.TriggerIndex(
+                            index=dt.EndpointIndex(value=0), trigger=index + 1
+                        ),
+                        set=digital_trigger_proto.TriggerSet(
+                            continuous=trig_set.continuous,
+                            duration_cycles=duration,
+                            output_select=trig_set.outputs,
+                        ),
+                    )
+                )
+
+            sequencer_config = unitcell_proto.SequencerConfig(
+                program=sequencer_proto.Program(
+                    index=dt.EndpointIndex(value=0),
+                    description="No Description",
+                    program_data=self._seq_instructions[idx],
+                )
+            )
+
+            cell_config.sequencer_config.CopyFrom(sequencer_config)
+
+            job.cell_configs.append(cell_config)
+
+        coupler_config = unitcell_proto.CouplerConfig()
+        for idx, coupler in enumerate(self.couplers):
+            # pulse_player.reset()
+            for index, pulse in enumerate(coupler.coupling_pulses):
+                # In the array, triggers are indexed starting from 0. However, index 0 is reserved and cannot be used.
+                coupler_config.pulses.append(
+                    pulse_player_proto.IndexedPulses(
+                        index=dt.EndpointIndex(value=self.coupler_map[idx]),
+                        pulse=pulse_player_proto.Pulse(
+                            values=pulse(2e9),  # TODO: actual sample rate
+                            index=index + 1,
+                        ),
+                    )
+                )
+
+        # Update the string representation of the last job in the QiController
+        self.qic._last_qijob = self._job_representation
+
+        return job
+
+    def submit(self):
+        return self.qic.cell.submit(
+            self.to_protobuf(),
+            averages=self.averages,
+            cells=self.cell_map,
+            recordings=[cell.get_number_of_recordings() for cell in self.cell_list],
+            data_collection=self._data_collection,
+        )
 
     def record(self):
         """Starts the experiment recording and returns the result.

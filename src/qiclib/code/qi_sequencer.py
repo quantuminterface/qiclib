@@ -485,23 +485,19 @@ class Sequencer:
 
         return dst_reg
 
-    def __evaluate_if_cond_val(self, value: QiExpression) -> _Register:
-        if isinstance(value, _QiCalcBase):
-            reg = self.add_qi_calc(value)
-        elif isinstance(value, _QiVariableBase):
-            reg = self.get_var_register(value)
-        elif isinstance(value, _QiConstValue):
-            reg = self.immediate_to_register(value.value)
+    def expression_to_register(self, expr: QiExpression) -> _Register:
+        """Moves the result of an expression to a register"""
+        qicalc_val = self.__evaluate_qicalc_val(expr)
+        if isinstance(qicalc_val, int):
+            return self.immediate_to_register(qicalc_val)
         else:
-            raise TypeError("Unknown type in QiCalc")
-
-        return reg
+            return qicalc_val
 
     def add_if_condition(self, qi_condition: QiCondition) -> SeqBranch:
         """Evaluates QiCondition and inverts condition operation to add to the sequencer."""
-        reg1 = self.__evaluate_if_cond_val(qi_condition.val1)
+        reg1 = self.expression_to_register(qi_condition.val1)
 
-        reg2 = self.__evaluate_if_cond_val(qi_condition.val2)
+        reg2 = self.expression_to_register(qi_condition.val2)
 
         # invert QiCondition --> if(x == 3) --> jump over if-body when (x!=3)
         cmd = self.add_condition(reg1, qi_condition.op.invert(), reg2)

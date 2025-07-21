@@ -32,10 +32,13 @@ Using the :meth:`RFDataConverter.set_mixer_frequency`, the sampling frequency of
 The Frequency range is -Fs/2 to Fs/2.
 """
 
+from __future__ import annotations
+
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
+from typing import Literal
 
 import qiclib.packages.grpc.datatypes_pb2 as dt
 import qiclib.packages.grpc.rfdc_pb2 as proto
@@ -65,6 +68,21 @@ class MixerMode(Enum):
     """
     The mixer is in real-to-complex mode, i.e. mixes real signals to IQ signals
     """
+
+    @staticmethod
+    def from_str(value: str) -> MixerMode:
+        value_lower = value.lower()
+        if value_lower == "off":
+            return MixerMode.OFF
+        if value_lower == "c2c":
+            return MixerMode.COMPLEX_TO_COMPLEX
+        if value_lower == "c2r":
+            return MixerMode.COMPLEX_TO_REAL
+        if value_lower == "r2c":
+            return MixerMode.REAL_TO_COMPLEX
+        raise ValueError(
+            f"Mixer mode as string must be 'off', 'c2c' (complex to complex), 'c2r' (complex to real) or 'r2c' (real to complex), not {value}"
+        )
 
 
 class InvSincFilterState(Enum):
@@ -148,6 +166,35 @@ class DACBlockStatus:
     fifo_flags_asserted: bool
 
 
+class Tile(ABC):
+    def __init__(self, stub: grpc_stub.RFdcServiceStub, tile: int):
+        self._stub = stub
+        self.tile = tile
+
+    @abstractmethod
+    def _endpoint_index(self) -> proto.TileIndex:  # type: ignore
+        pass
+
+    def shut_down(self):
+        self._stub.Shutdown(self._endpoint_index())
+
+    def start_up(self):
+        self._stub.StartUp(self._endpoint_index())
+
+    def reset(self):
+        self._stub.Reset(self._endpoint_index())
+
+
+class DacTile(Tile):
+    def _endpoint_index(self):
+        return proto.TileIndex(tile=self.tile, converter_type=proto.ConverterType.DAC)
+
+
+class AdcTile(Tile):
+    def _endpoint_index(self):
+        return proto.TileIndex(tile=self.tile, converter_type=proto.ConverterType.ADC)
+
+
 class DataConverter(ABC):
     def __init__(self, stub: grpc_stub.RFdcServiceStub, tile: int, block: int):
         self._stub = stub
@@ -186,6 +233,13 @@ class DataConverter(ABC):
         )
 
     @property
+    def frequency_resolution(self):
+        """
+        Returns the frequency resolution of the mixers of this converter.
+        """
+        return self._stub.GetFrequencyResolution(self._endpoint_index()).value
+
+    @property
     def mixer_phase(self) -> float:
         """
         Get the phase of the mixer
@@ -205,11 +259,73 @@ class DataConverter(ABC):
         """
         self._stub.SetPhase(proto.Phase(value=phase, index=self._endpoint_index()))
 
+    @property
+    def mixer_mode(self) -> MixerMode:
+        """
+        Get the mixer mode.
+        If the mixer mode is not MixerMode.OFF, for
+        - DACs, this is either MixerMode.COMPLEX_TO_COMPLEX or MixerMode.COMPLEX_TO_REAL
+        - ADCs, this is either MixerMode.COMPLEX_TO_COMPLEX or MixerMode.REAL_TO_COMPLEX
+
+        If the mode is MixerMode.COMPLEX_TO_COMPLEX, two DACs or ADCs (always neighboring) are used.
+        Otherwise, one ADC and one DAC is used.
+
+        :return:
+            The mode tha the DAC currently operates at
+
+        """
+        return MixerMode(self._stub.GetMixerMode(self._endpoint_index()).mode)
+
+    @mixer_mode.setter
+    def mixer_mode(self, new_value: MixerMode | Literal["c2c", "c2r", "r2c"]):
+        if isinstance(new_value, str):
+            mm = MixerMode.from_str(new_value)
+        else:
+            mm = new_value
+
+        if mm == MixerMode.OFF:
+            raise ValueError(
+                "Cannot disable the signal. Either remove the output signal or shut down the tile."
+            )
+
+        typ = self._endpoint_index().converter_type
+
+        # disallow real to complex and complex to real for invalid converter types
+        if typ == proto.ConverterType.DAC and mm == MixerMode.REAL_TO_COMPLEX:
+            raise ValueError("real to complex is not supported for DACs")
+
+        if typ == proto.ConverterType.ADC and mm == MixerMode.COMPLEX_TO_REAL:
+            raise ValueError("complex to real is not supported for ADCs")
+
+        self._stub.SetMixerMode(
+            proto.IndexedMode(index=self._endpoint_index(), mode=mm.value)
+        )
+
+    @property
+    def nyquist_zone(self) -> int:
+        return self._stub.GetNyquistZone(self._endpoint_index()).value
+
+    @nyquist_zone.setter
+    def nyquist_zone(self, zone: int):
+        self._stub.SetNyquistZone(
+            proto.NyquistZone(index=self._endpoint_index(), value=zone)
+        )
+
 
 class DAC(DataConverter):
     def _endpoint_index(self) -> proto.ConverterIndex:  # type: ignore
         return proto.ConverterIndex(
             tile=self.tile, block=self.block, converter_type=proto.ConverterType.DAC
+        )
+
+    @property
+    def output_current(self) -> float:
+        return self._stub.GetOutputCurrent(self._endpoint_index())
+
+    @output_current.setter
+    def output_current(self, value: float):
+        self._stub.SetOutputCurrent(
+            proto.IndexedDouble(index=self._endpoint_index(), value=value)
         )
 
     @property
@@ -275,6 +391,16 @@ class ADC(DataConverter):
             fifo_flags_asserted=bool(status.fifoflagsasserted),
         )
 
+    @property
+    def attenuation(self) -> float:
+        return self._stub.GetDigitalAttenuation(self._endpoint_index()).value
+
+    @attenuation.setter
+    def attenuation(self, value: float):
+        return self._stub.SetDigitalAttenuation(
+            proto.IndexedDouble(index=self._endpoint_index(), value=value)
+        )
+
 
 class RFDataConverter(PlatformComponent):
     """
@@ -310,6 +436,28 @@ class RFDataConverter(PlatformComponent):
         that will be updated on the QiController.
         """
         return ADC(self._stub, tile, block)
+
+    def dac_tile(self, tile: int) -> DacTile:
+        """
+        Get a reference to a DAC tile
+
+        Using the returned object, properties of the corresponding DAC tile can be set
+        and will be updated on the QiController.
+
+        :param tile: The tile number
+        """
+        return DacTile(self._stub, tile)
+
+    def adc_tile(self, tile: int) -> AdcTile:
+        """
+        Get a reference to an ADC tile
+
+        Using the returned object, properties of the corresponding ADC tile can be set
+        and will be updated on the QiController.
+
+        :param tile: The tile number
+        """
+        return AdcTile(self._stub, tile)
 
     @ServiceHubCall(errormsg="Could not reset RF data converter status")
     def reset_status(self):

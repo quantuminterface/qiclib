@@ -59,7 +59,7 @@ the same DAC channel for frequency-division-multiplexed readout and control.
 from __future__ import annotations
 
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -326,6 +326,86 @@ class UnitCells(PlatformComponent, Mapping):
         self._stub.ClearConverterStatus(dt.Empty())
 
     @ServiceHubCall
+    def submit(
+        self,
+        job: proto.Job,
+        averages: int,
+        cells: list[int],
+        recordings: list[int],
+        data_collection: str = "average",
+    ) -> int:
+        switch_dict = {
+            "average": proto.AVERAGE,
+            "amp_pha": proto.AMPLITUDE_PHASE,
+            "iqcloud": proto.IQCLOUD,
+            "raw": proto.RAW_TRACE,
+            "states": proto.STATES,
+            "counts": proto.STATE_COUNT,
+            "quantum_jumps": proto.QM_JUMPS,
+        }
+        mode = switch_dict.get(data_collection)
+        if mode is None:
+            raise RuntimeError("Unknown data collection mode " + data_collection)
+        job.parameters.CopyFrom(
+            proto.ExperimentParameters(
+                mode=mode,
+                shots=averages,
+                cells=cells,
+                recordings=recordings,
+            )
+        )
+
+        return self._stub.Submit(job).value
+
+    @ServiceHubCall
+    def status(self, job_id: int):
+        return self._stub.GetJobStatus(dt.UInt(value=job_id))
+
+    def _process_results(
+        self,
+        mode: proto.DataCollectionMode,
+        results: Iterable[proto.ExperimentResults.SingleCellResults],
+    ):
+        # Convert the proto messages to appropriate arrays
+        if mode in {proto.AVERAGE, proto.AMPLITUDE_PHASE, proto.RAW_TRACE}:
+            return [
+                (
+                    np.array(single_result.data_double_1, dtype=float),  # I
+                    np.array(single_result.data_double_2, dtype=float),  # Q
+                )
+                for single_result in results
+            ]
+        elif mode == proto.IQCLOUD:
+            return [
+                (
+                    np.array(single_result.data_sint32_1, dtype=np.int32),
+                    np.array(single_result.data_sint32_2, dtype=np.int32),
+                )
+                for single_result in results
+            ]
+        elif mode in {proto.STATES, proto.QM_JUMPS, proto.STATE_COUNT}:
+            return [
+                np.array(single_result.data_uint32, dtype=np.uint32)
+                for single_result in results
+            ]
+        else:
+            raise AssertionError("Unknown data collection mode")
+
+    @ServiceHubCall
+    def stream_results(self, job_id: int):
+        from tqdm.notebook import tqdm
+
+        with tqdm() as pbar:
+            current = 0
+            for progress in self._stub.StreamResults(dt.UInt(value=job_id)):
+                experiment_results = progress
+                pbar.total = progress.max_progress
+                pbar.update(progress.progress - current)
+                current = progress.progress
+        results = experiment_results
+        return self._process_results(results.mode, results.results)
+
+    @ServiceHubCall
     def run_experiment(
         self,
         averages: int,
@@ -355,7 +435,7 @@ class UnitCells(PlatformComponent, Mapping):
         mode = switch_dict.get(data_collection)
         if mode is None:
             raise Warning("Unknown data collection mode " + data_collection)
-        experiment_results = None
+        experiment_results = []
         for progress in self._stub.RunExperiment(
             proto.ExperimentParameters(
                 mode=mode,
@@ -364,32 +444,7 @@ class UnitCells(PlatformComponent, Mapping):
                 recordings=recordings,
             )
         ):
-            experiment_results = progress
+            experiment_results.extend(progress.results)
             if progress_callback:
                 progress_callback(progress.progress)
-        results = experiment_results.results
-        mode = experiment_results.mode
-        # Convert the proto messages to appropriate arrays
-        if mode in {proto.AVERAGE, proto.AMPLITUDE_PHASE, proto.RAW_TRACE}:
-            return [
-                (
-                    np.array(single_result.data_double_1, dtype=float),  # I
-                    np.array(single_result.data_double_2, dtype=float),  # Q
-                )
-                for single_result in results
-            ]
-        elif mode == proto.IQCLOUD:
-            return [
-                (
-                    np.array(single_result.data_sint32_1, dtype=np.int32),
-                    np.array(single_result.data_sint32_2, dtype=np.int32),
-                )
-                for single_result in results
-            ]
-        elif mode in {proto.STATES, proto.QM_JUMPS, proto.STATE_COUNT}:
-            return [
-                np.array(single_result.data_uint32, dtype=np.uint32)
-                for single_result in results
-            ]
-        else:
-            raise AssertionError("Unknown data collection mode")
+        return self._process_results(mode, experiment_results)

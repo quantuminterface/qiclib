@@ -261,6 +261,9 @@ class QiExpression:
     def __ne__(self, x):
         return QiCondition(self, QiOpCond.NE, QiExpression._from(x))
 
+    def is_dynamic(self) -> bool:
+        return not isinstance(self, (_QiConstValue, QiCellProperty))
+
 
 class _QiVariableBase(QiExpression):
     """Base class for QiVariables.

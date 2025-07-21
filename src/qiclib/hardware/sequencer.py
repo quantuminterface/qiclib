@@ -41,8 +41,10 @@ class _SequencerRegisters(Sequence):
         return 32
 
     def __getitem__(self, index):
-        self._check_index(index)
-        register_index = proto.RegisterIndex(endpoint=self._endpoint, index=index)
+        index = self._check_index(index)
+        register_index = proto.RegisterIndex(
+            endpoint=dt.EndpointIndex(value=self._endpoint), index=index
+        )
         return self._stub.GetRegister(register_index).value
 
     def __setitem__(self, index, value):
@@ -51,16 +53,21 @@ class _SequencerRegisters(Sequence):
         self._stub.SetRegister(proto.Register(index=register_index, value=value))
 
     def _check_index(self, index):
-        if not isinstance(index, int) or index < 0:
-            raise IndexError("Index needs to be a non-negative integer.")
-        if index > 31:
-            raise IndexError("Register index has to be between 0 and 31.")
+        if not isinstance(index, int):
+            raise TypeError(f"index must be an integer, not {type(index)}")
+        if index < 0:
+            index = len(self) + index
+        if index >= len(self):
+            raise IndexError("index out of range")
+        return index
 
     def _check_value(self, value):
-        if not isinstance(value, int) or value < 0:
-            raise IndexError("Value needs to be a non-negative integer.")
+        if not isinstance(value, int):
+            raise TypeError(f"register value must be an integer, not {type(value)}")
+        if value < 0:
+            raise ValueError("register value needs to be a non-negative integer")
         if value >= 2**32:
-            raise IndexError("Register value is limited to 32 bits.")
+            raise ValueError("register value is limited to 32 bits")
 
     def __str__(self):
         return "[" + ", ".join(map(str, self)) + "]"
@@ -161,9 +168,7 @@ class Sequencer(PlatformComponent):
             if the code is a string
         """
         if isinstance(code, str):
-            raise ValueError(
-                "Sequencer program needs to be passed as SequencerCode! Hex String format is deprecated."
-            )
+            raise ValueError("Sequencer program needs to be passed as SequencerCode!")
         # TODO Update all experiments to use the new format
         return self.load_program_code(code.to_command_values(), description)
 

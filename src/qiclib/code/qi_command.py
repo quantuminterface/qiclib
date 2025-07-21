@@ -477,15 +477,20 @@ class AssignCommand(QiVariableCommand):
         self._value = QiExpression._from(value)
 
         dst._type_info.add_illegal_type(QiType.STATE, _IllegalTypeReason.ASSIGN)
-        _add_equal_constraints(
+        for typ in (
+            QiType.TIME,
+            QiType.STATE,
             QiType.NORMAL,
-            _TypeConstraintReasonQiCommand(AssignCommand),
-            self._value,
-            dst,
-        )
-        _add_equal_constraints(
-            QiType.TIME, _TypeConstraintReasonQiCommand(AssignCommand), self._value, dst
-        )
+            QiType.FREQUENCY,
+            QiType.PHASE,
+            QiType.AMPLITUDE,
+        ):
+            _add_equal_constraints(
+                typ,
+                _TypeConstraintReasonQiCommand(AssignCommand),
+                self._value,
+                dst,
+            )
 
         for variable in self.value.contained_variables:
             self.add_associated_variable(variable)
@@ -639,6 +644,36 @@ class ForRangeCommand(QiCommand):
         self._body = commands
         check_variable = QiVarInForRange(self.var)
         self.accept(check_variable)
+
+    def __iter__(self):
+        return iter(self.body)
+
+
+class WhileCommand(QiCommand):
+    def __init__(self, condition: QiCondition, body: list[QiCommand] | None = None):
+        super().__init__()
+        self.condition = condition
+        self._body = body or []
+
+        for variable in condition.contained_variables:
+            self.add_associated_variable(variable)
+
+    def accept(self, visitor, *args, **kwargs):
+        return visitor.visit_while(self, *args, **kwargs)
+
+    def _stringify(self) -> str:
+        return f"While({self.condition})"
+
+    def __str__(self) -> str:
+        return self._stringify()
+
+    @property
+    def body(self) -> list[QiCommand]:
+        return self._body
+
+    @body.setter
+    def body(self, commands: list[QiCommand]):
+        self._body = commands
 
     def __iter__(self):
         return iter(self.body)

@@ -82,7 +82,7 @@ def ServiceHubCall(call=None, errormsg="Error executing command", tries=5):
                     raise NotImplementedError(details) from error
 
                 if attempt < tries - 1:
-                    print(f"Internal Error. Retry {attempt+1} of {tries-1}...")
+                    print(f"Internal Error. Retry {attempt + 1} of {tries - 1}...")
             raise RuntimeError(f"{errormsg} ({code}). Error message:\n{details}")
 
     return call_wrapper(call)  # pylint: disable=no-value-for-parameter

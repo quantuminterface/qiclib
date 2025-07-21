@@ -65,7 +65,7 @@ class SequencerCodeBase:
 
         # Assembler: TR mod0, mod1, mod2, mod3, mod4, mod5, reset, sync
         self.assembler.append(
-            f"tr {mod0}, {mod1}, {mod2}, {mod3}, {mod4}, {mod5}, {reset*1}, {sync*1}\n"
+            f"tr {mod0}, {mod1}, {mod2}, {mod3}, {mod4}, {mod5}, {reset * 1}, {sync * 1}\n"
         )
 
         # Binary:
@@ -162,30 +162,6 @@ class SequencerCodeBase:
         #   7-11 Rd: Register Address
         self._add_command_value(0b0001010 + (register << 7))  # opcode TRIG_WAIT_REG
 
-        return self
-
-    def tri(self, clock_cycles=1, mod0=0, mod1=0, mod2=0, mod3=0, mod4=0, mod5=0):
-        """Triggers the modules with the given codes.
-        Then waits the given number of `clock_cycles`.
-
-        .. deprecated:: 0.0.2
-            New sequencer has two separate commands for trigger (TR) and wait (WTI/WTR).
-        """
-        self.tr(mod0, mod1, mod2, mod3, mod4, mod5)
-        if clock_cycles > 1:
-            self.wti(clock_cycles - 1)
-        return self
-
-    def trr(self, reg=1, mod0=0, mod1=0, mod2=0, mod3=0, mod4=0, mod5=0):
-        """Triggers the modules with the given codes.
-        Then waits as long as the delay in the specified register `reg` states, decremented by 1,
-        to account for trigger instruction duration.
-
-        .. deprecated:: 0.0.2
-            New sequencer has two separate commands for trigger (TR) and wait (WTI/WTR).
-        """
-        self.tr(mod0, mod1, mod2, mod3, mod4, mod5)
-        self.twr(reg)
         return self
 
     def sts(self, save_register, mod0=False, mod1=False, mod2=False, mod3=False):
@@ -463,7 +439,7 @@ class SequencerCodeBase:
         ):
             # Register 30 and 31 are reserved for internal use, and 0 is always zero
             raise ValueError(
-                f"Register has to be between {1*no_zero} and {31 - 2*user}, but was {register}."
+                f"Register has to be between {1 * no_zero} and {31 - 2 * user}, but was {register}."
             )
 
     @staticmethod
@@ -563,9 +539,10 @@ class SequencerCode(SequencerCodeBase):
         if digital < 0 or digital >= (1 << 2):
             raise ValueError("external has to be between 0 and 3.")
 
-        return self.tri(
-            clock_cycles_to_wait, readout, recording, manipulation, coupling0, coupling1
-        )
+        self.tr(readout, recording, manipulation, coupling0, coupling1, digital)
+        if clock_cycles_to_wait > 1:
+            self.wti(clock_cycles_to_wait - 1)
+        return self
 
     def trigger_registered(
         self,
@@ -603,9 +580,9 @@ class SequencerCode(SequencerCodeBase):
         if digital < 0 or digital >= (1 << 2):
             raise ValueError("external has to be between 0 and 3.")
 
-        return self.trr(
-            register, readout, recording, manipulation, coupling0, coupling1, digital
-        )
+        self.tr(readout, recording, manipulation, coupling0, coupling1, digital)
+        self.twr(register)
+        return self
 
     def trigger(
         self,

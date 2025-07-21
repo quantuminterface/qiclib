@@ -56,6 +56,7 @@ from .qi_jobs import (
     RotateFrame,
     Sync,
     Wait,
+    While,
 )
 from .qi_pulse import QiPulse, ShapeLib
 from .qi_result import QiResult
@@ -92,5 +93,6 @@ __all__ = [
     "ShapeLib",
     "Sync",
     "Wait",
+    "While",
     "qi_seq_instructions",
 ]

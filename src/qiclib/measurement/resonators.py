@@ -242,7 +242,7 @@ class FindResonators:
                 self.config.frequency_step,
             )
             print(
-                f"Frequency range for VNA set to min: {self.config.frequency_start* 1e-6} MHz max: {self.config.frequency_stop * 1e-6} MHz, step size: {self.config.frequency_step * 1e-3} kHz"
+                f"Frequency range for VNA set to min: {self.config.frequency_start * 1e-6} MHz max: {self.config.frequency_stop * 1e-6} MHz, step size: {self.config.frequency_step * 1e-3} kHz"
             )
 
         # set the filtering window higher for closeups of resonators to avoid false negatives (may be overwritten by changing the detector options in config)
@@ -281,7 +281,7 @@ class FindResonators:
         print("Resonators suspected at frequencies (decreasing persistence):")
 
         for i, frequency in enumerate(resonator_frequencies):
-            print(f"({i+1}) {frequency*1e-6:.2f} MHz")
+            print(f"({i + 1}) {frequency * 1e-6:.2f} MHz")
 
         print("for n < 3, be sure to enter the correct number of resonators.")
         print("In case of false negatives, try increasing n.")
@@ -389,7 +389,7 @@ class Resonators:
                 self.conv_axis_frequencies[self.resonator_indices[i]]
                 + plotwidth * 8e-3,
                 ylim[1] - plotheight * 1e-2,
-                f"{resonator_freq:.2f} MHz ({i+1})",
+                f"{resonator_freq:.2f} MHz ({i + 1})",
                 color="gray",
                 rotation=90,
                 verticalalignment="top",
@@ -399,7 +399,7 @@ class Resonators:
         # if path is specified, save figure
         if save_to is not None:
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            file_name = f"Resonators_PLOT_Amplitude_{self.frequency_axis_start* 1e-6}Mhzstart_{self.frequency_axis_stop* 1e-6}Mhzstop_{self.frequency_step* 1e-3}kHzstep_{timestamp}.pdf"
+            file_name = f"Resonators_PLOT_Amplitude_{self.frequency_axis_start * 1e-6}Mhzstart_{self.frequency_axis_stop * 1e-6}Mhzstop_{self.frequency_step * 1e-3}kHzstep_{timestamp}.pdf"
             file_path = f"{save_to}/{file_name}"  # Constructing the file path directly
 
             plt.savefig(file_path)
@@ -437,7 +437,7 @@ class Resonators:
         # if path is specified, save figure
         if save_to is not None:
             timestamp = datetime.now().strftime("%d_%H-%M-%S")
-            file_name = f"Resonators_PLOT_Phase_{self.frequency_axis_start* 1e-6}Mhzstart_{self.frequency_axis_stop* 1e-6}Mhzstop_{self.frequency_step* 1e-3}kHzstep_{timestamp}.pdf"
+            file_name = f"Resonators_PLOT_Phase_{self.frequency_axis_start * 1e-6}Mhzstart_{self.frequency_axis_stop * 1e-6}Mhzstop_{self.frequency_step * 1e-3}kHzstep_{timestamp}.pdf"
             file_path = f"{save_to}/{file_name}"  # Constructing the file path directly
 
             plt.savefig(file_path)
@@ -573,7 +573,7 @@ class Resonators:
                 iq_data_real[start_index:end_index],
                 iq_data_imag[start_index:end_index],
                 color=colors[color_index % num_resonators],
-                label=f"Resonator ({idx+1}) at {self.conv_axis_frequencies[index]:.2f} MHz",
+                label=f"Resonator ({idx + 1}) at {self.conv_axis_frequencies[index]:.2f} MHz",
             )
             color_index += 1
 
@@ -668,12 +668,12 @@ class Resonators:
             if calc_qfactor > 100000:
                 qfactors.q_factors[index] = 0
                 print(
-                    f"Resonator ({index+1}) at {qfactors.corrected_f0[index]:.3f} MHz:    Q = N/A"
+                    f"Resonator ({index + 1}) at {qfactors.corrected_f0[index]:.3f} MHz:    Q = N/A"
                 )
             else:
                 qfactors.q_factors[index] = calc_qfactor
                 print(
-                    f"Resonator ({index+1}) at {qfactors.corrected_f0[index]:.3f} MHz (corrected):    Q = {calc_qfactor:.2f}"
+                    f"Resonator ({index + 1}) at {qfactors.corrected_f0[index]:.3f} MHz (corrected):    Q = {calc_qfactor:.2f}"
                 )
 
         print("Call visualize_qfactor(index) to visualize the fitting for a resonator.")
@@ -684,7 +684,7 @@ class Resonators:
         data = np.column_stack((self.unsmoothed_spectrum, self.phase_data))
 
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        file_name = f"Resonators_DATA_{self.frequency_axis_start* 1e-6}Mhzstart_{self.frequency_axis_stop* 1e-6}Mhzstop_{self.frequency_step* 1e-3}kHzstep_{timestamp}.tsv"
+        file_name = f"Resonators_DATA_{self.frequency_axis_start * 1e-6}Mhzstart_{self.frequency_axis_stop * 1e-6}Mhzstop_{self.frequency_step * 1e-3}kHzstep_{timestamp}.tsv"
         file_path = f"{path}/{file_name}"  # Constructing the file path directly
 
         np.savetxt(file_path, data, delimiter="\t", header="amplitude\tphase")
@@ -696,7 +696,7 @@ class Resonators:
 
         # Create file name based on resonator attributes and timestamp
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        file_name = f"Resonators_FOUND_{self.frequency_axis_start* 1e-6}Mhzstart_{self.frequency_axis_stop* 1e-6}Mhzstop_{self.frequency_step* 1e-3}kHzstep_{timestamp}.tsv"
+        file_name = f"Resonators_FOUND_{self.frequency_axis_start * 1e-6}Mhzstart_{self.frequency_axis_stop * 1e-6}Mhzstop_{self.frequency_step * 1e-3}kHzstep_{timestamp}.tsv"
         file_path = f"{path}/{file_name}"  # Constructing the file path directly
 
         # Save array to TSV file
@@ -783,7 +783,7 @@ class Qfactors:
             plt.ylabel("Amplitude (dB)", fontsize=15)
 
         plt.title(
-            f"Resonator ({index}) at {self.corrected_f0[index-1]:.2f} MHz (corr.) Q = {self.q_factors[index-1]:.2f}",
+            f"Resonator ({index}) at {self.corrected_f0[index - 1]:.2f} MHz (corr.) Q = {self.q_factors[index - 1]:.2f}",
             fontsize=15,
         )
 

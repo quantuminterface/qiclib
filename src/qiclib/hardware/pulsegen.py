@@ -563,30 +563,6 @@ class PulseGen(PlatformComponent):
             "amplitude_calibration": self.amplitude_calibration,
         }
 
-    ##################################
-    ### DEPRECATED FUNCTION REGION ###
-    ##################################
-
-    @property
-    def nco_frequency(self) -> float:
-        """The internal frequency in Hz used for the generated microwave pulses.
-
-        .. deprecated::
-            For more intuitive handling, this has been replaced by `PulseGen.internal_frequency`.
-            It will be removed completely in a future version.
-        """
-        warnings.warn(
-            "Deprecation Warning: nco_frequency is deprecated, please use internal_frequency instead."
-        )
-        return self.internal_frequency
-
-    @nco_frequency.setter
-    def nco_frequency(self, nco_frequency):
-        warnings.warn(
-            "Deprecation Warning: nco_frequency is deprecated, please use internal_frequency instead."
-        )
-        self.internal_frequency = nco_frequency
-
 
 @platform_attribute_collector
 class TriggerSet(PlatformComponent):
