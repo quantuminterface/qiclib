@@ -232,6 +232,13 @@ class SequencerInstruction(abc.ABC):
         """
         raise NotImplementedError
 
+    @staticmethod
+    def nop() -> SequencerInstruction:
+        """
+        Returns a NOP instruction
+        """
+        return SeqRegImmediateInst(QiOp.PLUS, 0, 0, 0)
+
 
 _AnyFunct3 = TypeVar("_AnyFunct3")
 
@@ -272,6 +279,18 @@ class SeqITypeInst(SequencerInstruction, abc.ABC, Generic[_AnyFunct3]):
         self.funct3 = funct3
         self.immediate = immediate
         self.funct7 = funct7
+
+    def __eq__(self, value):
+        if not isinstance(value, self.__class__):
+            return False
+        return (
+            self.op == value.op
+            and self.dst_reg == value.dst_reg
+            and self.register == value.register
+            and self.funct3 == value.funct3
+            and self.immediate == value.immediate
+            and self.funct7 == value.funct7
+        )
 
     @staticmethod
     def QiOpToFunct3(operator: QiOp) -> SeqRegImmFunct3:
@@ -358,6 +377,18 @@ class SeqRTypeInst(SequencerInstruction, abc.ABC):
         self.reg2 = reg2
         self.funct7 = funct7
 
+    def __eq__(self, value):
+        if not isinstance(value, self.__class__):
+            return False
+        return (
+            self.op == value.op
+            and self.dst_reg == value.dst_reg
+            and self.reg1 == value.reg1
+            and self.funct3 == value.funct3
+            and self.reg2 == value.reg2
+            and self.funct7 == value.funct7
+        )
+
     @staticmethod
     def QiOpToFunct3(operator: QiOp):
         funct3 = {
@@ -433,6 +464,15 @@ class SeqUTypeInst(SequencerInstruction, abc.ABC):
         self.dst_reg = dst_reg
         self._immediate = immediate
 
+    def __eq__(self, value):
+        if not isinstance(value, self.__class__):
+            return False
+        return (
+            self.op == value.op
+            and self.dst_reg == value.dst_reg
+            and self._immediate == value._immediate
+        )
+
     @property
     def immediate(self):
         return self._immediate
@@ -477,6 +517,17 @@ class SeqSTypeInst(SequencerInstruction):
         self.reg1 = reg1
         self.reg2 = reg2
         self.immediate = immediate
+
+    def __eq__(self, value):
+        if not isinstance(value, self.__class__):
+            return False
+        return (
+            self.op == value.op
+            and self.funct3 == value.funct3
+            and self.reg1 == value.reg1
+            and self.reg2 == value.reg2
+            and self.immediate == value.immediate
+        )
 
     def get_riscv_instruction(self) -> int:
         instruction = 0
@@ -540,6 +591,17 @@ class SeqBTypeInst(SequencerInstruction, abc.ABC):
         self.immediate = immediate
         self.reg1 = reg1
         self.reg2 = reg2
+
+    def __eq__(self, value):
+        if not isinstance(value, self.__class__):
+            return False
+        return (
+            self.op == value.op
+            and self.funct3 == value.funct3
+            and self.reg1 == value.reg1
+            and self.reg2 == value.reg2
+            and self.immediate == value.immediate
+        )
 
     @staticmethod
     def QiCondToFunct3(operator: QiOpCond):
@@ -750,7 +812,7 @@ class SeqLoadUpperImm(SeqUTypeInst):
         super().__init__(SeqOpCode.LOAD_UPPER_IMM, dst_reg, immediate)
 
     def __str__(self):
-        return f"lui r{self.dst_reg}, {self.immediate}"
+        return f"lui r{self.dst_reg}, {hex(self.immediate)}"
 
 
 class SeqBranch(SeqBTypeInst):
@@ -783,6 +845,11 @@ class SeqJump(SequencerInstruction):
     def __init__(self, rel_jump: int = 0) -> None:
         super().__init__(SeqOpCode.JUMP)
         self.jump_val = rel_jump
+
+    def __eq__(self, value):
+        if not isinstance(value, self.__class__):
+            return False
+        return self.op == value.op and self.jump_val == value.jump_val
 
     def get_riscv_instruction(self) -> int:
         instruction = 0
@@ -862,9 +929,9 @@ class SeqTrigger(SeqUTypeInst):
 
 class SeqCellSync(SeqUTypeInst):
     def __init__(self, cells: list):
-        assert (
-            17 > len(cells) > 1
-        ), "Number of cells to be synchronized is out of range."
+        assert 17 > len(cells) > 1, (
+            "Number of cells to be synchronized is out of range."
+        )
         immediate = 0
         for x in cells:
             immediate |= 1 << x
@@ -910,9 +977,9 @@ class SeqStore(SeqSTypeInst):
         base: int,
         offset: int = 0,
     ):
-        assert SequencerInstruction.is_value_in_lower_immediate(
-            offset
-        ), "Invalid offset ({offset}) to store instruction."
+        assert SequencerInstruction.is_value_in_lower_immediate(offset), (
+            "Invalid offset ({offset}) to store instruction."
+        )
 
         # The hardware currently only supports 32 bit memory accesses.
         super().__init__(
@@ -990,9 +1057,9 @@ class SeqLoad(SeqITypeInst[SeqMemFunct3]):
         base: int,
         offset: int = 0,
     ):
-        assert SequencerInstruction.is_value_in_lower_immediate(
-            offset
-        ), "Invalid offset ({offset}) to load instruction."
+        assert SequencerInstruction.is_value_in_lower_immediate(offset), (
+            "Invalid offset ({offset}) to load instruction."
+        )
 
         # The hardware currently only supports 32 bit memory accesses.
         super().__init__(

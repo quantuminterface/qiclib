@@ -17,6 +17,7 @@ import json
 import os
 import re
 
+import numpy as np
 import pytest
 
 import qiclib.packages.utility as util
@@ -828,6 +829,34 @@ QiJob:
         )
 
 
+def test_duplicte_amplitude_assignment():
+    """Test that different amplitude assignments to pulses on the same cell are handled correctly and preserved."""
+    sample = QiSample(1)
+    sample[0]["amp0"] = 0.5
+    sample[0]["amp1"] = 0.6
+
+    with QiJob() as job:
+        q = QiCells(1)
+        Play(q[0], QiPulse(length=100e-9, amplitude=q[0]["amp0"]))
+        Play(q[0], QiPulse(length=100e-9, amplitude=q[0]["amp1"]))
+
+    job._build_program(sample)
+
+    # Verify the commands were created correctly
+    assert len(job.commands) == 2
+
+    # Verify first Play command has correct amplitude
+    assert isinstance(job.commands[0], PlayCommand)
+    assert job.commands[0].pulse.amplitude == 0.5
+
+    # Verify second Play command has correct amplitude
+    assert isinstance(job.commands[1], PlayCommand)
+    assert job.commands[1].pulse.amplitude == 0.6
+
+    # Verify the pulses are treated as distinct due to different amplitudes
+    assert len(job.cells[0].manipulation_pulses) == 2
+
+
 class TestQiJobDescriptionMissingProperty:
     @pytest.fixture
     def job(self):
@@ -1258,6 +1287,16 @@ def test_calculation_with_sample_value_and_inferred_variable():
     job._build_program(sample)
 
 
+def test_calculation_minus_frequency():
+    with QiJob() as job:
+        q = QiCells(1)
+        f = QiFrequencyVariable()
+        with ForRange(f, 0, 100e6, 10e6):
+            PlayReadout(q[0], QiPulse(100e-9, frequency=33e6 - f))
+
+    job._build_program()
+
+
 def test_highest_frequency():
     with pytest.raises(
         ValueError, match=re.escape("Frequency of 5e+08 Hz is too high")
@@ -1266,3 +1305,29 @@ def test_highest_frequency():
             f = QiFrequencyVariable()
             with ForRange(f, 0, 500e6, 100e6):
                 pass
+
+
+def test_amplitude_as_sample_ok():
+    sample = QiSample(1)
+    sample[0].update(rec_amplitude=0.06)
+
+    with QiJob() as job:
+        q = QiCells(1)
+        PlayReadout(
+            q[0], QiPulse(amplitude=q[0]["rec_amplitude"], length="cw", frequency=100e6)
+        )
+    job._build_program(sample)
+    assert isinstance(job.commands[0], PlayReadoutCommand)
+    assert job.commands[0].pulse.amplitude == 0.06
+    assert np.all(job.commands[0].pulse(2e9) == np.array([0.06] * 8))
+
+
+def test_nested_parallel_blocks():
+    with pytest.raises(
+        RuntimeError, match="Type ParallelCommand not allowed inside Parallel()"
+    ):
+        with QiJob():
+            q = QiCells(1)
+            with Parallel():
+                with Parallel():  # This should fail - nested parallel not allowed
+                    PlayReadout(q[0], QiPulse(length=50e-9))

@@ -48,6 +48,9 @@ class QiCommandVisitor(abc.ABC):
     def visit_for_range(self, for_range_cm, *args, **kwargs):
         self.visit_context_manager(for_range_cm, *args, **kwargs)
 
+    def visit_while(self, while_cm, *args, **kwargs):
+        self.visit_context_manager(while_cm, *args, **kwargs)
+
     def visit_variable_command(self, variable_cmd, *args, **kwargs):
         pass
 
@@ -199,6 +202,16 @@ class QiCmdVariableInspection(QiCommandVisitor):
             for cmd in reversed(cmd_list):
                 cmd.accept(self)
 
+    def visit_while(self, while_cm, *args, **kwargs):
+        # Process the body commands first
+        for command in reversed(while_cm.body):
+            command.accept(self)
+
+        # Process variables in the while condition and associate them with the while loop's relevant cells
+        for variable in while_cm._associated_variable_set:
+            for cell in while_cm._relevant_cells:
+                self._add_cell_to_var(cell, variable)
+
     def visit_variable_command(self, variable_cmd, *args, **kwargs):
         self.visit_cell_command(variable_cmd)
 
@@ -272,6 +285,10 @@ class QiResultCollector(QiCommandVisitor):
 
     def visit_for_range(self, for_range_cm, *args, **kwargs):
         for cmd in for_range_cm.body:
+            cmd.accept(self)
+
+    def visit_while(self, while_cm, *args, **kwargs):
+        for cmd in while_cm.body:
             cmd.accept(self)
 
 
@@ -387,6 +404,10 @@ class QiJobVisitor(QiCommandVisitor, QiExpressionVisitor):
 
     def visit_for_range(self, for_range_cm, *args, **kwargs):
         self.visit_context_manager(for_range_cm)
+
+    def visit_while(self, while_cm, *args, **kwargs):
+        while_cm.condition.accept(self)
+        self.visit_context_manager(while_cm)
 
     def visit_variable_command(self, variable_cmd, *args, **kwargs):
         from .qi_command import AssignCommand
@@ -547,6 +568,15 @@ class QiStringifyJob(QiCommandVisitor):
 
         _addFor(self)
         self.visit_context_manager(for_range_cm)
+
+    def visit_while(self, while_cm, *args, **kwargs):
+        # Only wrap the actual "While" with str patching
+        @self.str_patcher.patch_str
+        def _addWhile(self):
+            self._add_string(while_cm._stringify() + ":")
+
+        _addWhile(self)
+        self.visit_context_manager(while_cm)
 
     @str_patcher.patch_str
     def visit_assign_command(self, assign_cmd):

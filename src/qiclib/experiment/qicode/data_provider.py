@@ -15,6 +15,9 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 from abc import ABC, abstractmethod
 
+import numpy as np
+import numpy.typing as npt
+
 
 class DataProvider(ABC):
     """
@@ -55,11 +58,15 @@ class DataProvider(ABC):
         return self.get_default_q(cell_index, index)
 
     @abstractmethod
-    def get_iq_cloud_i(self, cell_index: int, index: int, recording_count: int):
+    def get_iq_cloud_i(
+        self, cell_index: int, index: int, recording_count: int
+    ) -> npt.NDArray[np.int32]:
         pass
 
     @abstractmethod
-    def get_iq_cloud_q(self, cell_index: int, index: int, recording_count: int):
+    def get_iq_cloud_q(
+        self, cell_index: int, index: int, recording_count: int
+    ) -> npt.NDArray[np.int32]:
         pass
 
     def get_states(self, cell_index: int):
@@ -86,10 +93,14 @@ class _TaskrunnerDataProvider(DataProvider):
     def get_amp_pha_q(self, cell_index: int, index: int):
         return self._result[cell_index][1][index]
 
-    def get_iq_cloud_i(self, cell_index: int, index: int, recording_count: int):
+    def get_iq_cloud_i(
+        self, cell_index: int, index: int, recording_count: int
+    ) -> npt.NDArray[np.int32]:
         return self._result[recording_count * cell_index + index][0::2]
 
-    def get_iq_cloud_q(self, cell_index: int, index: int, recording_count: int):
+    def get_iq_cloud_q(
+        self, cell_index: int, index: int, recording_count: int
+    ) -> npt.NDArray[np.int32]:
         return self._result[recording_count * cell_index + index][1::2]
 
 
@@ -105,16 +116,17 @@ class _InternalPluginDataProvider(DataProvider):
         return self._result[cell_index][1]
 
     @staticmethod
-    def _get_iq_cloud(data, index: int, recording_count: int):
-        return data[
-            index * (len(data) // recording_count) : (index + 1)
-            * (len(data) // recording_count)
-        ]
+    def _get_iq_cloud(data, index: int, recording_count: int) -> npt.NDArray[np.int32]:
+        return data[index::recording_count]
 
-    def get_iq_cloud_i(self, cell_index: int, index: int, recording_count: int):
+    def get_iq_cloud_i(
+        self, cell_index: int, index: int, recording_count: int
+    ) -> npt.NDArray[np.int32]:
         data = self._result[cell_index][0]
         return self._get_iq_cloud(data, index, recording_count)
 
-    def get_iq_cloud_q(self, cell_index: int, index: int, recording_count: int):
+    def get_iq_cloud_q(
+        self, cell_index: int, index: int, recording_count: int
+    ) -> npt.NDArray[np.int32]:
         data = self._result[cell_index][1]
         return self._get_iq_cloud(data, index, recording_count)

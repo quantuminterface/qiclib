@@ -1159,6 +1159,56 @@ class ProgramBuilderVisitor(QiCommandVisitor):
                 f"Unexpected type {for_range_cm.var.type} used in for loop."
             )
 
+    def visit_while(self, while_cm):
+        """Visits While command and builds sequencer commands.
+        Implements a while loop using conditional branches and loop constructs.
+        """
+        relevant_cells = self.get_relevant_cells(while_cm)
+
+        # TODO: Sync necessary? (probably yes)
+
+        # Manually evaluate condition values and keep registers allocated for loop duration
+        branch_instructions = {}
+        branch_program_counters = {}
+        condition_registers = {}
+
+        for cell in relevant_cells:
+            # Manually evaluate condition values to control register lifetime
+            reg1 = self.cell_seq[cell].expression_to_register(while_cm.condition.val1)
+            reg2 = self.cell_seq[cell].expression_to_register(while_cm.condition.val2)
+
+            # Store registers that need to be released after the loop
+            condition_registers[cell] = (reg1, reg2)
+
+            # Add the branch condition (inverted)
+            branch_instructions[cell] = self.cell_seq[cell].add_condition(
+                reg1, while_cm.condition.op.invert(), reg2
+            )
+
+            # Store the program counter when the branch instruction was added
+            branch_program_counters[cell] = self.cell_seq[cell].get_prog_size() - 1
+
+        # Process the loop body
+        self.build_element_body(while_cm.body, while_cm._relevant_cells)
+
+        for cell in relevant_cells:
+            # Add unconditional jump back to the beginning of the loop
+            self.cell_seq[cell].add_jump(
+                branch_program_counters[cell] - self.cell_seq[cell].get_prog_size()
+            )
+
+            # Set the branch target to exit the loop (jump to after the unconditional jump)
+            branch_instructions[cell].set_jump_value(
+                self.cell_seq[cell].get_prog_size() - branch_program_counters[cell]
+            )
+
+            # Now release the condition registers after the loop is complete
+            reg1, reg2 = condition_registers[cell]
+            if not isinstance(while_cm.condition.val1, _QiVariableBase):
+                self.cell_seq[cell].release_register(reg1)
+            if not isinstance(while_cm.condition.val2, _QiVariableBase):
+                self.cell_seq[cell].release_register(reg2)
+
     def visit_variable_command(self, variable_cmd):
         pass
 
@@ -1169,7 +1219,7 @@ class ProgramBuilderVisitor(QiCommandVisitor):
         If Assign.val is _QiVariableBase, the variable's register is used to write to Assign.var
         """
         from .qi_jobs import _QiVariableBase
-        from .qi_var_definitions import _QiCalcBase
+        from .qi_var_definitions import QiOp, _QiCalcBase
 
         relevant_cells = self.get_relevant_cells(assign_cmd)
 
@@ -1183,7 +1233,29 @@ class ProgramBuilderVisitor(QiCommandVisitor):
                 dst_reg.valid = self.if_depth == 0
                 continue
             elif isinstance(assign_cmd.value, _QiCalcBase):
-                register = self.cell_seq[cell].add_qi_calc(assign_cmd.value)
+                # Optimization: for simple cases like var = var + constant, generate single instruction
+                if (
+                    hasattr(assign_cmd.value, "val1")
+                    and hasattr(assign_cmd.value, "val2")
+                    and isinstance(assign_cmd.value.val1, _QiVariableBase)
+                    and assign_cmd.value.val1 is assign_cmd.var
+                    and isinstance(assign_cmd.value.val2, _QiConstValue)
+                    and assign_cmd.value.op in [QiOp.PLUS, QiOp.MINUS]
+                ):
+                    # Generate direct calculation: dst_reg = dst_reg + constant
+                    value2 = assign_cmd.value.val2.value
+                    if assign_cmd.value.op == QiOp.MINUS:
+                        value2 = -value2
+
+                    self.cell_seq[cell].add_calculation(
+                        dst_reg, QiOp.PLUS, value2, dst_reg
+                    )
+                    # Preserve validity: result is valid only if source was valid and we're not in an if block
+                    dst_reg.valid = dst_reg.valid and self.if_depth == 0
+                    continue
+                else:
+                    # General case: use temporary register
+                    register = self.cell_seq[cell].add_qi_calc(assign_cmd.value)
             elif isinstance(assign_cmd.value, _QiVariableBase):
                 register = self.cell_seq[cell].get_var_register(assign_cmd.value)
             else:
@@ -1236,6 +1308,11 @@ def _assign_variables_to_cell(commands: list[QiCommand]):
     cell_to_variable_visitor = QiCmdVariableInspection()
     for command in reversed(commands):
         command.accept(cell_to_variable_visitor)
+
+    # run again to process assign commands after variables have been assigned to cells
+    assign_visitor = QiCmdVariableInspection()
+    for command in reversed(commands):
+        command.accept(assign_visitor)
 
     # run again, to ensure all Assignment statements are considered as well
     _assign_cell_to_context_manager(commands)

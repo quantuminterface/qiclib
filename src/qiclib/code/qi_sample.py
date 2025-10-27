@@ -160,7 +160,6 @@ class QiSample(MutableSequence[QiSampleCell]):
             else:
                 sample.cells[i].update(**cell)
         sample.cell_map = source.get("cell_map", list(range(len(cells))))
-        print(sample)
         return sample
 
     def save(self, file_path: str | os.PathLike, overwrite: bool = False):

@@ -1,31 +1,29 @@
 variables:
-  GIT_SUBMODULE_STRATEGY: "normal"
-  GIT_SUBMODULE_FORCE_HTTPS: "false"
-  GIT_DEPTH: "3"
+  GIT_SUBMODULE_STRATEGY: recursive
+  GIT_SUBMODULE_FORCE_HTTPS: true
+  UV_VERSION: 0.9
+  PYTHON_VERSION: 3.9
+  BASE_LAYER: bookworm
+  UV_SYSTEM_PYTHON: 1
+  GITHUB_PUBLISH_USER: quantuminterfaceBot
+  GITHUB_PUBLISH_REPO: quantuminterface/qiclib
 
+stages: [analysis, test, build, deploy]
 
-before_script:
-  - python3 --version
-  - python3 -m venv venv
-  - . venv/bin/activate
-  - python -m pip install --upgrade pip
-  - pip install -e .
-  - pip install -r requirements-dev.txt
-  - export PATH="$PATH:/home/cicd/.local/bin" #needed to use coverage.py
-  - export LC_ALL=en_US.utf-8
-  - export LANG=en_US.utf-8
+default:
+  image: ghcr.io/astral-sh/uv:$UV_VERSION-python$PYTHON_VERSION-$BASE_LAYER
 
-stages:
-  - analysis
-  - test
-  - deploy
+.base_ruff:
+  interruptible: true
+  before_script:
+    - export UV_TOOL_BIN_DIR=/usr/local/bin
+    - cd $CI_PROJECT_DIR
 
 unit_tests:
+  extends: .base_ruff
   stage: test
-  tags:
-    - almalinux8
   script:
-    - pytest tests --junitxml tests.xml --cov=. --cov-report xml --cov-report term
+    - uv run pytest --junitxml tests.xml --cov=qiclib --cov-fail-under=50 --cov-report xml --cov-report term
   coverage: "/TOTAL.+ ([0-9]{1,3}%)/"
   artifacts:
     when: always
@@ -39,23 +37,22 @@ unit_tests:
         path: coverage.xml
 
 check_format:
+  extends: .base_ruff
   stage: analysis
-  tags:
-    - almalinux8
   variables:
     PRE_COMMIT_HOME: ${CI_PROJECT_DIR}/.cache/pre-commit
   cache:
     paths:
       - ${PRE_COMMIT_HOME}
   script:
-    - pre-commit run --all-files
+    - git config --global --add safe.directory '*'
+    - uvx pre-commit run --all-files
 
 check_mypy:
+  extends: .base_ruff
   stage: analysis
-  tags:
-    - almalinux8
   script:
-    - mypy src --junit-xml mypy.xml --install-types --non-interactive
+    - uv run mypy src --junit-xml mypy.xml --install-types --non-interactive --check-untyped-defs
   artifacts:
     when: on_failure
     paths:
@@ -63,27 +60,95 @@ check_mypy:
     reports:
       junit: mypy.xml
 
-pylint:
+check_ruff:
+  extends: .base_ruff
   stage: analysis
-  tags:
-    - almalinux8
   script:
-    - mkdir ./pylint
-    - pylint --output-format=text src | tee ./pylint/pylint.log || pylint-exit $?
-    - PYLINT_SCORE=$(sed -n 's/^Your code has been rated at \([-0-9.]*\)\/.*/\1/p' ./pylint/pylint.log)
-    - anybadge --label=Pylint --file=pylint/pylint.svg --value=$PYLINT_SCORE 2=red 4=orange 8=yellow 10=green
-    - echo "Pylint score is $PYLINT_SCORE"
+    - uv run ruff check --output-format junit > ruff.xml
+  artifacts:
+    when: on_failure
+    paths:
+      - ruff.xml
+    reports:
+      junit: ruff.xml
+
+pylint:
+  extends: .base_ruff
+  stage: analysis
+  before_script:
+    - mkdir -p public/badges
+    - echo undefined > public/badges/$CI_JOB_NAME.score
+  script:
+    - uv run pylint --exit-zero --output-format=text src | tee /tmp/pylint.txt
+    - sed -n 's/^Your code has been rated at \([-0-9.]*\)\/.*/\1/p' /tmp/pylint.txt > public/badges/$CI_JOB_NAME.score
+    - uv run --with pylint-gitlab pylint --exit-zero --output-format=pylint_gitlab.GitlabCodeClimateReporter src > codeclimate.json
+  after_script:
+    - uvx anybadge --overwrite --label $CI_JOB_NAME --value=$(cat public/badges/$CI_JOB_NAME.score) --file=public/badges/$CI_JOB_NAME.svg 4=red 6=orange 8=yellow 10=green
+    - |
+      echo "Your score is: $(cat public/badges/$CI_JOB_NAME.score)"
   artifacts:
     paths:
-      - ./pylint/
+      - public
+    reports:
+      codequality: codeclimate.json
+    when: always
 
-publish-pypi:
-  stage: deploy
-  tags:
-    - almalinux8
-  only:
-    - tags
+build_project:
+  extends: .base_ruff
+  stage: build
   script:
-    - pip install build twine
-    - python3 -m build
-    - TWINE_PASSWORD=${CI_JOB_TOKEN} TWINE_USERNAME=gitlab-ci-token python3 -m twine upload --verbose --repository-url ${CI_API_V4_URL}/projects/${SDR_PYPI_REPO}/packages/pypi dist/*
+    - uv build
+    - uvx twine check dist/*
+  artifacts:
+    paths:
+      - dist/
+    when: on_success
+
+mirror_to_github:
+  stage: deploy
+  rules:
+    # Run only for tags matching semver like v1.2.3, v2.0.0-rc.1, v1.0.0+build123, etc.
+    - if: '$CI_COMMIT_TAG =~ /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/'
+  script:
+    - VERSION="$CI_COMMIT_TAG"
+    - echo "Preparing release $VERSION for GitHub mirror"
+
+    # Prepare a clean directory with the repository contents
+    - mkdir ../mirror
+    - git archive "$VERSION" | tar -x -C ../mirror
+    - cd ../mirror
+    - git init --initial-branch=main
+
+    # Git Identity
+    - git config user.email "quantuminterface@ipe.kit.edu"
+    - git config user.name "Quantuminterface Bot"
+
+    # Pull existing history from GitHub
+    - git remote add origin "https://${GITHUB_PUBLISH_USER}:${GITHUB_PUBLISH_TOKEN}@github.com/${GITHUB_PUBLISH_REPO}.git"
+    - git fetch origin main
+    - git checkout -B main
+    - git reset --soft origin/main
+
+    # Commit the new release snapshot
+    - git add -A
+    - git commit -m "Release $VERSION"
+
+    # Tag and push both branch and tag
+    - git tag "$VERSION"
+    - git push origin main
+    - git push origin "$VERSION"
+
+publish_to_pypi:
+  stage: deploy
+  needs:
+    - build_project
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/'
+  script:
+    - echo "Publishing version $CI_COMMIT_TAG to PyPI"
+
+    # Build the wheel and sdist
+    - uv build
+
+    # Publish to PyPI
+    - uv publish --token "$PYPI_PUBLISH_TOKEN"

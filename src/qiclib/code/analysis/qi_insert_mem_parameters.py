@@ -170,11 +170,11 @@ class AnticipatedMemoryParameterAnalysis(DataflowVisitor):
                     # Missing memory parameter => invalidate value so stores for subsequent
                     # memory parameters are not placed before this command.
                     out.set_cell_value(cell, FlatLatticeValue.no_const())
-                elif FlatLatticeValue.value(mem_param) != cell_values.get_cell_value(
+                elif FlatLatticeValue.of_value(mem_param) != cell_values.get_cell_value(
                     cell
                 ):
                     assert isinstance(mem_param, QiExpression)
-                    out.set_cell_value(cell, FlatLatticeValue.value(mem_param))
+                    out.set_cell_value(cell, FlatLatticeValue.of_value(mem_param))
 
             return out
         else:
@@ -197,7 +197,7 @@ class AnticipatedMemoryParameterAnalysis(DataflowVisitor):
             if mem_param is None:
                 out.set_cell_value(cell, FlatLatticeValue.no_const())
             else:
-                out.set_cell_value(cell, FlatLatticeValue.value(mem_param))
+                out.set_cell_value(cell, FlatLatticeValue.of_value(mem_param))
 
         return out
 
@@ -208,6 +208,12 @@ class AnticipatedMemoryParameterAnalysis(DataflowVisitor):
 
         # Kill variables that use the loop variable, because it will change in the next iteration
         return cell_values.invalidate_values_containing(var)
+
+    def visit_while(self, while_cm, cell_values: CellValues, node):
+        # For while loops, we need to invalidate variables that might change during the loop
+        # Since we can't predict which variables will change, we take a conservative approach
+        # and invalidate all variables that could potentially be modified in the loop body
+        return cell_values.invalidate_all()
 
     def visit_assign_command(
         self, assign_cmd: AssignCommand, cell_values: CellValues, node
@@ -235,7 +241,7 @@ class AnticipatedMemoryParameterAnalysis(DataflowVisitor):
                 if store_cmd.value is None:
                     out.set_cell_value(cell, FlatLatticeValue.no_const())
                 else:
-                    out.set_cell_value(cell, FlatLatticeValue.value(store_cmd.value))
+                    out.set_cell_value(cell, FlatLatticeValue.of_value(store_cmd.value))
 
             return out
         else:
@@ -280,6 +286,10 @@ class AvailableMemoryParameterAnalysis(DataflowVisitor):
         out = self.propagate(cell_values, node)
         var = for_range_cm.var
         return out.invalidate_values_containing(var)
+
+    def visit_while(self, while_cm, cell_values, node):
+        out = self.propagate(cell_values, node)
+        return out.invalidate_all()
 
     def visit_variable_command(self, variable_cmd, cell_values, node):
         return self.propagate(cell_values, node)
@@ -462,6 +472,15 @@ class ExpressionInvariantVisitor(QiCommandVisitor):
         )
         self.visit_context_manager(for_range_cm)
 
+    def visit_while(self, while_cm, *args, **kwargs):
+        # For while loops, check if the condition variables are in the expression
+        if self.expr is not None:
+            condition_vars = while_cm.condition.contained_variables
+            self.result = self.result and not any(
+                var in self.expr.contained_variables for var in condition_vars
+            )
+        self.visit_context_manager(while_cm)
+
 
 def _insert_pseudo_command_before_for_loop(
     cfg: _CFG, for_loop: _CFGNode, pseudo_command: QiCommand
@@ -555,7 +574,9 @@ class InsertMemoryParameterConfiguration:
         self,
         recording_module_address: int,
         get_memory_param,
-        if_memory_param_is_constant,
+        initial_cell_attr_name: str,
+        expected_type: QiType,
+        transform=lambda x: x,
         anticipated_analysis=AnticipatedMemoryParameterAnalysis,
         available_analysis=AvailableMemoryParameterAnalysis,
     ):
@@ -569,11 +590,13 @@ class InsertMemoryParameterConfiguration:
         # `if_memory_param_is_constant` is a function which is called when a memory parameter is only ever used with a constant value.
         # i.e. QiConstValue or QiCellProperty. In such cases we usually want to just initialize this value in the recording module
         # and don't insert any store instructions.
-        self.if_memory_param_is_constant = if_memory_param_is_constant
+        self.initial_cell_attr_name = initial_cell_attr_name
+        self.expected_type = expected_type
 
         # The anticipated and available analysis can be modified if special behaviour is needed in certain cases.
         self.anticipated_analysis = anticipated_analysis
         self.available_analysis = available_analysis
+        self.transform = transform
 
     def compare_eq_memory_param(
         self, x: QiExpression | None, y: QiExpression | None
@@ -582,6 +605,14 @@ class InsertMemoryParameterConfiguration:
             return x._equal_syntax(y)
         else:
             return x is None and y is None
+
+    def initialize_constant_property(
+        self,
+        cell: QiCell,
+        value: _QiConstValue | QiCellProperty,
+    ):
+        assert value.type == self.expected_type
+        setattr(cell, self.initial_cell_attr_name, value)
 
 
 def _insert_memory_parameter_store_commands(
@@ -633,10 +664,10 @@ def _insert_memory_parameter_store_commands(
             )
             if mem_param.type == FlatLatticeValue.Type.VALUE:
                 mem_param = mem_param.value
-                assert isinstance(
-                    mem_param, (_QiConstValue, QiCellProperty)
-                ), f"mem_param is {mem_param}, but should be constant."
-                configuration.if_memory_param_is_constant(cell, mem_param)
+                assert isinstance(mem_param, (_QiConstValue, QiCellProperty)), (
+                    f"mem_param is {mem_param}, but should be constant."
+                )
+                configuration.initialize_constant_property(cell, mem_param)
             else:
                 # Mem param is never used
                 pass
@@ -660,7 +691,9 @@ def _insert_memory_parameter_store_commands(
                     instruction_list, idx = _in_job_insert_command_here(node, pred)
 
                     command = MemStoreCommand(
-                        cell, configuration.recording_module_address, antic_value.value
+                        cell,
+                        configuration.recording_module_address,
+                        configuration.transform(antic_value.value),
                     )
                     lists = command_insertions.get(
                         id(instruction_list), ([], instruction_list)
@@ -691,9 +724,9 @@ RECORDING_OFFSET_ADDRESS = 0x8010 // 4
 MANIPULATION_PULSE_FREQUENCY_ADDRESS = 0x18014 // 4
 READOUT_PULSE_FREQUENCY_ADDRESS = 0x38100 // 4
 MANIPULATION_PULSE_PHASE_ADDRESS = 0x18030 // 4
-READOUT_PULSE_PHASE_ADDRESS = 0x38030 // 4
+READOUT_PULSE_PHASE_ADDRESS = 0x10030 // 4
 MANIPULATION_PULSE_AMPLITUDE_ADDRESS = 0x18010 // 4
-READOUT_PULSE_AMPLITUDE_ADDRESS = 0x38010 // 4
+READOUT_PULSE_AMPLITUDE_ADDRESS = 0x10010 // 4
 
 
 class AnticipatedPulseVisitor(AnticipatedMemoryParameterAnalysis):
@@ -720,51 +753,28 @@ class AnticipatedPulseVisitor(AnticipatedMemoryParameterAnalysis):
             return super().visit_cell_command(cell_cmd, cell_values, node)
 
 
-def _initialize_constant_manipulation_pulse_frequency(
-    cell: QiCell, frequency: _QiConstValue | QiCellProperty
-):
-    assert frequency.type == QiType.FREQUENCY
-    cell._initial_manip_freq = frequency.float_value
+class AnticipatedAmplitudePhaseVisitor(AnticipatedMemoryParameterAnalysis):
+    def __init__(self, config, pulse_command, property):
+        """pulse_command is either the type PlayCommand or PlayReadoutCommand."""
+        super().__init__(config)
 
+        self.pulse_command = pulse_command
+        self.property = property
 
-def _initialize_constant_readout_pulse_frequency(
-    cell: QiCell, frequency: _QiConstValue | QiCellProperty
-):
-    assert frequency.type == QiType.FREQUENCY
-    cell._initial_readout_freq = frequency.float_value
-
-
-def _initialize_constant_manipulation_pulse_phase(
-    cell: QiCell, phase: _QiConstValue | QiCellProperty
-):
-    assert phase.type == QiType.PHASE
-    cell._initial_phase = phase.float_value
-
-
-def _initialize_constant_readout_pulse_phase(
-    cell: QiCell, phase: _QiConstValue | QiCellProperty
-):
-    assert phase.type == QiType.PHASE
-    cell._initial_phase = phase.float_value
-
-
-def _initialize_constant_manipulation_pulse_amplitude(
-    cell: QiCell, amplitude: _QiConstValue | QiCellProperty
-):
-    assert amplitude.type == QiType.AMPLITUDE
-    cell._initial_amplitude = amplitude.float_value
-
-
-def _initialize_constant_readout_pulse_amplitude(
-    cell: QiCell, amplitude: _QiConstValue | QiCellProperty
-):
-    assert amplitude.type == QiType.AMPLITUDE
-    cell._initial_amplitude = amplitude.float_value
-
-
-def _initialize_constant_recording_offset(cell, offset: _QiConstValue | QiCellProperty):
-    assert offset.type == QiType.TIME
-    cell._initial_rec_offset = offset.float_value
+    def visit_cell_command(self, cell_cmd, cell_values: CellValues, node):
+        if isinstance(cell_cmd, self.pulse_command) and (
+            self.property(cell_cmd.pulse) is None
+            or isinstance(self.property(cell_cmd.pulse), QiCellProperty)
+        ):
+            # If a Play command has no frequency specified it should keep using the frequency that was previously set.
+            # Therefore, we need to prevent store instructions for following commands to be placed before this instructions.
+            # We do this, by setting the anticipated value to no_const, because we look for FlatLatticeValue.value of
+            # the anticipated analysis when inserting store instructions.  (see _insert_memory_parameter_store_commands)
+            out = copy(cell_values)
+            out.set_cell_value(cell_cmd.cell, FlatLatticeValue.no_const())
+            return out
+        else:
+            return super().visit_cell_command(cell_cmd, cell_values, node)
 
 
 def _get_recording_offset(cmd) -> QiExpression | None:
@@ -772,22 +782,6 @@ def _get_recording_offset(cmd) -> QiExpression | None:
         return cmd._offset
     elif isinstance(cmd, PlayReadoutCommand) and cmd.recording is not None:
         return cmd.recording._offset
-    else:
-        return IrrelevantCommand
-
-
-def _get_manip_pulse_amplitude(cmd: QiCommand):
-    if isinstance(cmd, PlayCommand) and isinstance(cmd.pulse.amplitude, QiExpression):
-        return cmd.pulse.amplitude | (cmd.pulse.amplitude << 16)
-    else:
-        return IrrelevantCommand
-
-
-def _get_readout_pulse_amplitude(cmd: QiCommand):
-    if isinstance(cmd, PlayReadoutCommand) and isinstance(
-        cmd.pulse.amplitude, QiExpression
-    ):
-        return cmd.pulse.amplitude | (cmd.pulse.amplitude << 16)
     else:
         return IrrelevantCommand
 
@@ -813,12 +807,14 @@ def replace_variable_assignment_with_store_commands(job: QiJob):
         InsertMemoryParameterConfiguration(
             RECORDING_OFFSET_ADDRESS,
             _get_recording_offset,
-            _initialize_constant_recording_offset,
+            "_initial_rec_offset",
+            QiType.TIME,
         ),
         InsertMemoryParameterConfiguration(
             MANIPULATION_PULSE_FREQUENCY_ADDRESS,
             lambda cmd: _get_manip_pulse_property(cmd, lambda x: x.frequency),
-            _initialize_constant_manipulation_pulse_frequency,
+            "_initial_manip_freq",
+            QiType.FREQUENCY,
             anticipated_analysis=lambda config: AnticipatedPulseVisitor(
                 config, PlayCommand, lambda pulse: pulse.frequency
             ),
@@ -826,7 +822,8 @@ def replace_variable_assignment_with_store_commands(job: QiJob):
         InsertMemoryParameterConfiguration(
             READOUT_PULSE_FREQUENCY_ADDRESS,
             lambda cmd: _get_readout_pulse_property(cmd, lambda x: x.frequency),
-            _initialize_constant_readout_pulse_frequency,
+            "_initial_readout_freq",
+            QiType.FREQUENCY,
             anticipated_analysis=lambda config: AnticipatedPulseVisitor(
                 config, PlayReadoutCommand, lambda pulse: pulse.frequency
             ),
@@ -834,34 +831,40 @@ def replace_variable_assignment_with_store_commands(job: QiJob):
         InsertMemoryParameterConfiguration(
             MANIPULATION_PULSE_PHASE_ADDRESS,
             lambda cmd: _get_manip_pulse_property(cmd, lambda x: x.phase),
-            _initialize_constant_manipulation_pulse_phase,
-            anticipated_analysis=lambda config: AnticipatedPulseVisitor(
+            "_initial_phase",
+            QiType.PHASE,
+            anticipated_analysis=lambda config: AnticipatedAmplitudePhaseVisitor(
                 config, PlayCommand, lambda pulse: pulse.phase
             ),
         ),
         InsertMemoryParameterConfiguration(
             READOUT_PULSE_PHASE_ADDRESS,
             lambda cmd: _get_readout_pulse_property(cmd, lambda x: x.phase),
-            _initialize_constant_readout_pulse_phase,
-            anticipated_analysis=lambda config: AnticipatedPulseVisitor(
+            "_initial_phase",
+            QiType.PHASE,
+            anticipated_analysis=lambda config: AnticipatedAmplitudePhaseVisitor(
                 config, PlayReadoutCommand, lambda pulse: pulse.phase
             ),
         ),
         InsertMemoryParameterConfiguration(
             MANIPULATION_PULSE_AMPLITUDE_ADDRESS,
-            _get_manip_pulse_amplitude,
-            _initialize_constant_manipulation_pulse_amplitude,
-            anticipated_analysis=lambda config: AnticipatedPulseVisitor(
+            lambda cmd: _get_manip_pulse_property(cmd, lambda x: x.amplitude),
+            "_initial_amplitude",
+            QiType.AMPLITUDE,
+            anticipated_analysis=lambda config: AnticipatedAmplitudePhaseVisitor(
                 config, PlayCommand, lambda pulse: pulse.amplitude
             ),
+            transform=lambda ampl: ampl | (ampl << 16),
         ),
         InsertMemoryParameterConfiguration(
             READOUT_PULSE_AMPLITUDE_ADDRESS,
-            _get_readout_pulse_amplitude,
-            _initialize_constant_readout_pulse_amplitude,
-            anticipated_analysis=lambda config: AnticipatedPulseVisitor(
+            lambda cmd: _get_readout_pulse_property(cmd, lambda x: x.amplitude),
+            "_initial_amplitude",
+            QiType.AMPLITUDE,
+            anticipated_analysis=lambda config: AnticipatedAmplitudePhaseVisitor(
                 config, PlayReadoutCommand, lambda pulse: pulse.amplitude
             ),
+            transform=lambda ampl: ampl | (ampl << 16),
         ),
     )
     for config in configs:

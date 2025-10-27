@@ -66,13 +66,9 @@ from __future__ import annotations
 
 import json
 import sys
-import warnings
-from contextlib import suppress
 
 import qiclib
-import qiclib.packages.constants as const
 from qiclib.hardware.direct_rf import DirectRf
-from qiclib.hardware.direct_rf_addon import DirectRfAddon
 from qiclib.hardware.pimc import PIMC
 from qiclib.hardware.platform_component import (
     PlatformComponent,
@@ -80,15 +76,10 @@ from qiclib.hardware.platform_component import (
     platform_attribute_collector,
 )
 from qiclib.hardware.pulse_player import PulsePlayer
-from qiclib.hardware.pulsegen import PulseGen
-from qiclib.hardware.recording import Recording
 from qiclib.hardware.rfdc import RFDataConverter
-from qiclib.hardware.sequencer import Sequencer
 from qiclib.hardware.servicehub import ServiceHub
-from qiclib.hardware.storage import Storage
 from qiclib.hardware.taskrunner import TaskRunner
 from qiclib.hardware.unitcell import UnitCells
-from qiclib.packages.qkit_polyfill import SampleObject
 from qiclib.packages.servicehub import Connection
 
 
@@ -151,28 +142,15 @@ class QiController(PlatformComponent):
             )
 
         if self._servicehub.has_direct_rf:
-            self._direct_rf_board = DirectRfAddon(
-                "DirectRf Addon Card", connection, self
-            )
-
             self._direct_rf = DirectRf("Direct RF", connection, self)
             self._output_channels = [
                 self._direct_rf.output_channel(i) for i in range(16)
             ]
             self._input_channels = [self._direct_rf.input_channel(i) for i in range(8)]
         else:
-            self._direct_rf_board = None
             self._direct_rf = None
             self._output_channels = None
             self._input_channels = None
-
-        # TODO Deprecated, remove in next major version
-        # Preconfigure some standard values
-        warnings.filterwarnings("ignore", category=FutureWarning)
-        self._sample = SampleObject()
-        self._init_sample_object()
-        self.update_modules()
-        warnings.filterwarnings("default", category=FutureWarning)
 
         # Remove old error messages
         self.clear_errors()
@@ -209,6 +187,7 @@ class QiController(PlatformComponent):
             0x38: "ZRF8",
             0x41: "ZCU216",
             0x51: "ZCU208",
+            0x61: "iWave",
         }.get(self.platform_id)
 
         if self.platform_name is None:
@@ -497,181 +476,3 @@ class QiController(PlatformComponent):
 
     def _print_warning(self, msg: str):
         sys.stderr.write(f"[QiController] WARNING: {msg}\n")
-
-    #####################################
-    # TODO Remove in next major version #
-    #####################################
-
-    @property
-    def sequencer(self) -> Sequencer:
-        """The sequencer of the first digital unit cell of the QiController.
-
-        .. deprecated::
-            `sequencer` will be removed in a future version. Please use the new cell
-            structure and `cell[0].sequencer` instead. The old syntax is a leftover
-            from the time when the QiController had only one sequencer.
-        """
-        warnings.warn(
-            "QiController.sequencer will be removed in future. Please use the new cell "
-            "structure instead, i.e.: QiController.cell[0].sequencer",
-            FutureWarning,
-        )
-        return self.cell[0].sequencer
-
-    @property
-    def readout(self) -> PulseGen:
-        """The readout signal generator of the first digital unit cell of the
-        QiController.
-
-        .. deprecated::
-            `readout` will be removed in a future version. Please use the new cell
-            structure and `cell[0].readout` instead. The old syntax is a leftover
-            from the time when the QiController had only one readout signal generator.
-        """
-        warnings.warn(
-            "QiController.readout will be removed in future. Please use the new cell "
-            "structure instead, i.e.: QiController.cell[0].readout",
-            FutureWarning,
-        )
-        return self.cell[0].readout
-
-    @property
-    def manipulation(self) -> PulseGen:
-        """The control/manipulation signal generator of the first digital unit cell of
-        the QiController.
-
-        .. deprecated::
-            `manipulation` will be removed in a future version. Please use the new cell
-            structure and `cell[0].manipulation` instead. The old syntax is a leftover
-            from the time when the QiController had only one control signal generator.
-        """
-        warnings.warn(
-            "QiController.manipulation will be removed in future. Please use the new "
-            "cell structure instead, i.e.: QiController.cell[0].manipulation",
-            FutureWarning,
-        )
-        return self.cell[0].manipulation
-
-    @property
-    def recording(self) -> Recording:
-        """The signal recorder of the first digital unit cell of the QiController.
-
-        .. deprecated::
-            `recording` will be removed in a future version. Please use the new cell
-            structure and `cell[0].recording` instead. The old syntax is a leftover
-            from the time when the QiController had only one signal recorder.
-        """
-        warnings.warn(
-            "QiController.recording will be removed in future. Please use the new cell "
-            "structure instead, i.e.: QiController.cell[0].recording",
-            FutureWarning,
-        )
-        return self.cell[0].recording
-
-    @property
-    def storage(self) -> Storage:
-        """The data storage of the first digital unit cell of the QiController.
-
-        .. deprecated::
-            `storage` will be removed in a future version. Please use the new cell
-            structure and `cell[0].storage` instead. The old syntax is a leftover
-            from the time when the QiController had only one data storage.
-        """
-        warnings.warn(
-            "QiController.storage will be removed in future. Please use the new cell "
-            "structure instead, i.e.: QiController.cell[0].storage",
-            FutureWarning,
-        )
-        return self.cell[0].storage
-
-    @property
-    def direct_rf_board(self):
-        if self._direct_rf_board is None:
-            raise AttributeError("DirectRf not available for this platform")
-        return self._direct_rf_board
-
-    @property
-    def sample(self):
-        """The sample object containing relevant information for experiments.
-
-        .. deprecated::
-            `sample` will be removed in the future. Please use the new QiCode syntax
-            (see `qiclib.code`) and the `qiclib.code.qi_jobs.QiSample` object instead.
-        """
-        warnings.warn(
-            "QiController.sample is deprecated and will be removed in future. Please "
-            "use the new QiCode syntax instead, i.e. create a `QiSample` object.",
-            FutureWarning,
-        )
-        return self._sample
-
-    @sample.setter
-    def sample(self, sample):
-        warnings.warn(
-            "QiController.sample is deprecated and will be removed in future. Please "
-            "use the new QiCode syntax instead, i.e. create a `QiSample` object.",
-            FutureWarning,
-        )
-        self._sample = sample
-        self.update_modules()
-
-    def _init_sample_object(self):
-        # helper function to initialize values only once after system power-on
-        def siz(var, default):  # set (to default) if zero
-            return default if var == 0 else var
-
-        self.sample.manip_if_frequency = siz(self.manipulation.if_frequency, 80e6)
-        self.sample.rec_if_frequency = siz(
-            max(
-                self.readout.internal_frequency,
-                self.recording.reference_frequency
-                if self.recording.interferometer_mode
-                else self.recording.internal_frequency,
-            ),
-            62.5e6,
-        )
-        if self.recording.interferometer_mode:
-            self.sample.rec_ref_delay = siz(self.recording.reference_delay, 16e-9)
-
-        self.sample.rec_duration = siz(self.recording.recording_duration, 400e-9)
-        self.sample.rec_offset = self.recording.trigger_offset
-        self.sample.rec_phase = self.recording.phase_offset
-
-        self.sample.expected_highest_signal_amplitude = (
-            self.recording.expected_highest_signal_amplitude
-        )
-        self.sample.rec_shift_average = self.recording.average_shift
-
-        # This is more a good guess than a guarantee
-        self.sample.rec_pulselength = siz(self.readout.triggerset[1].duration, 400e-9)
-
-        self.sample.clock = const.CONTROLLER_SAMPLE_FREQUENCY_IN_HZ
-
-    def update_modules(self):
-        """Updates some module settings based on the values set in the sample file."""
-        # Ignore if sample property is undefined
-        with suppress(AttributeError):
-            self.manipulation.if_frequency = self.sample.manip_if_frequency
-        with suppress(AttributeError):
-            self.readout.if_frequency = self.sample.rec_if_frequency
-            self.recording.internal_frequency = self.sample.rec_if_frequency
-            if self.recording.interferometer_mode:
-                self.recording.reference_frequency = self.sample.rec_if_frequency
-        with suppress(AttributeError):
-            self.recording.reference_delay = self.sample.rec_ref_delay
-        with suppress(AttributeError):
-            self.recording.recording_duration = self.sample.rec_duration
-        with suppress(AttributeError):
-            self.recording.expected_highest_signal_amplitude = (
-                self.sample.expected_highest_signal_amplitude
-            )
-        with suppress(AttributeError):
-            self.recording.average_shift = self.sample.rec_shift_average
-        with suppress(AttributeError):
-            self.recording.trigger_offset = self.sample.rec_offset
-        with suppress(AttributeError):
-            self.recording.phase_offset = self.sample.rec_phase
-        with suppress(AttributeError):
-            self.manipulation.frequency = self.sample.f01
-        with suppress(AttributeError):
-            self.readout.frequency = self.sample.fr

@@ -25,7 +25,7 @@ import functools
 import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from typing import Any, Callable, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Generic, TypeVar
 
 import numpy as np
 
@@ -47,6 +47,7 @@ from qiclib.code.qi_command import (
     StoreCommand,
     SyncCommand,
     WaitCommand,
+    WhileCommand,
 )
 from qiclib.code.qi_prog_builder import build_program, get_all_variables
 from qiclib.code.qi_pulse import QiPulse
@@ -74,6 +75,10 @@ from qiclib.experiment.qicode.data_handler import DataHandler
 from qiclib.experiment.qicode.data_provider import DataProvider
 from qiclib.hardware import digital_trigger
 from qiclib.hardware.taskrunner import TaskRunner
+from qiclib.hardware.unitcell import DataCollection
+
+if TYPE_CHECKING:
+    from qiclib.experiment.qicode.base import QiCodeExperiment
 
 
 class QiCell:
@@ -121,13 +126,13 @@ class QiCell:
         self._relevant_vars: set[_QiVariableBase] = set()
 
         # These attributes are determined by dataflow analyses
-        self._initial_manip_freq: float = None
-        self._initial_readout_freq: float = None
-        self._initial_rec_offset: float = None
-        self._initial_phase: float = None
-        self._initial_amplitude: float = None
+        self._initial_manip_freq: float | None = None
+        self._initial_readout_freq: float | None = None
+        self._initial_rec_offset: float | None = None
+        self._initial_phase: float | None = None
+        self._initial_amplitude: float | None = None
 
-        self._rec_length: int | float | QiCellProperty = None
+        self._rec_length: int | float | QiCellProperty | None = None
 
         self._properties: dict[str | QiCellProperty, Any] = {}
 
@@ -230,7 +235,18 @@ class QiCell:
     def initial_readout_frequency(self):
         if self._initial_readout_freq is None:
             if len(self.readout_pulses) > 0:
-                warnings.warn("Readout pulses without frequency given, using 30 MHz.")
+                # Check if any readout pulse has a variable frequency
+                has_variable_frequency = any(
+                    pulse.frequency is not None
+                    and isinstance(pulse.frequency, QiExpression)
+                    and pulse.frequency.contains_variables()
+                    for pulse in self.readout_pulses
+                )
+                # Only warn if no pulses have frequencies (not if they have variable frequencies)
+                if not has_variable_frequency:
+                    warnings.warn(
+                        "Readout pulses without frequency given, using 30 MHz."
+                    )
             return 30e6  # Default frequency
         freq = self._initial_readout_freq
         return freq() if isinstance(freq, QiCellProperty) else freq
@@ -349,7 +365,7 @@ class QiCells:
     :raises RuntimeError: When the :python:`QiCells` object is instantiated outside a :python:`QiJob`
     """
 
-    def __init__(self, num: int, job: QiJob = None) -> None:
+    def __init__(self, num: int, job: QiJob | None = None) -> None:
         self.cells = [QiCell(x) for x in range(num)]
         if job is None:
             QiJob.current()._register_cells(self.cells)
@@ -457,7 +473,7 @@ class _QiContextManager(ABC, Generic[_T]):
     """Base Class for If, Else, ForRange and Parallel.
     Defines functions for storing commands."""
 
-    def __init__(self, command: _T | None) -> None:
+    def __init__(self, command: _T) -> None:
         super().__init__()
         self._command = command
 
@@ -473,7 +489,7 @@ class _QiContextManager(ABC, Generic[_T]):
         pass
 
 
-class If(_QiContextManager[QiCondition]):
+class If(_QiContextManager[IfCommand]):
     """
     Add conditional logic to the program.
     If multiple cells are used inside the body, a synchronization between the cells takes place before the If.
@@ -540,10 +556,12 @@ class Else(_QiContextManager[None]):
         super().__init__(None)
 
     def __enter__(self):
-        self.if_cmd = QiJob.current().commands[-1]
+        if_cmd = QiJob.current().commands[-1]
 
-        if not isinstance(self.if_cmd, IfCommand):
+        if not isinstance(if_cmd, IfCommand):
             raise RuntimeError("Else is not preceded by If")
+
+        self.if_cmd = if_cmd
 
         QiJob.current()._open_new_context()
         return self
@@ -673,6 +691,41 @@ class ForRange(_QiContextManager[ForRangeCommand]):
         QiJob.current()._add_command(self._command)
 
 
+class While(_QiContextManager[WhileCommand]):
+    """Adds While loop to program.
+    If multiple cells are used inside body, a synchronisation between the cells is done before the While as well as after the end of the body.
+    The condition is evaluated before each iteration of the loop.
+
+    :param condition: The boolean condition to evaluate for continuing the loop
+
+    Example
+    -------
+
+    .. code-block:: python
+
+        with QiJob() as job:
+            q = QiCells(1)
+            state = QiVariable()
+
+            # Read out initial state
+            ql.jobs.Readout(q[0], state_to=state)
+            with While(state != 1):
+                ql.jobs.Readout(q[0], state_to=state)
+    """
+
+    def __init__(self, condition: QiCondition):
+        if not isinstance(condition, QiCondition):
+            raise RuntimeError(
+                "While loop condition must be a QiCondition (e.g., var1 < var2)."
+            )
+
+        super().__init__(WhileCommand(condition, body=[]))
+
+    def _update_body(self, body: list[QiCommand]):
+        self._command.body = body
+        QiJob.current()._add_command(self._command)
+
+
 class QiVariable(_QiVariableBase):
     """Used as variables for use in program.
     If no type is provided as an argument, it will infer its type.
@@ -684,17 +737,36 @@ class QiVariable(_QiVariableBase):
         value=None,
         name=None,
     ) -> None:
-        if type is int:
-            type = QiType.NORMAL
-        elif type is float:
-            type = QiType.TIME
-
-        super().__init__(type, value, name=name)
+        qi_type = QiType.convert_from(type)
+        super().__init__(qi_type, value, name=name)
         QiJob.current()._add_command(DeclareCommand(self))
         if self.value is not None:
-            val = _QiConstValue(value)
-            val._type_info.set_type(type, _TypeDefiningUse.VARIABLE_DEFINITION)
+            val = _QiConstValue(self.value)
+            val._type_info.set_type(qi_type, _TypeDefiningUse.VARIABLE_DEFINITION)
             QiJob.current()._add_command(AssignCommand(self, val))
+
+
+class SubmittedJob:
+    def __init__(self, job_id: int, exp: QiCodeExperiment):
+        self.exp = exp
+        self.job_id = job_id
+
+    def status(self):
+        return self.exp.qic.cell.status(self.job_id)
+
+    def _process_results(self, result):
+        # Check if some errors have been missed but do not raise an exception
+        self.exp.qic.check_errors(raise_exceptions=False)
+
+        data_provider = DataProvider.create(result, self.exp.use_taskrunner)
+        data_handler: DataHandler = self.exp._data_handler_factory(
+            data_provider, self.exp.cell_list, self.exp.averages
+        )
+        data_handler.process_results()
+
+    def results(self):
+        results = self.exp.qic.cell.stream_results(self.job_id)
+        self._process_results(results)
 
 
 class QiJob:
@@ -885,15 +957,15 @@ class QiJob:
         from ..experiment.qicode.base import QiCodeExperiment
 
         exp = QiCodeExperiment(
+            controller,
             *self._prepare_experiment_params(
-                controller,
                 sample,
                 averages,
                 cell_map,
                 coupling_map,
                 data_collection,
                 use_taskrunner,
-            )
+            ),
         )
 
         if data_collection is None:
@@ -914,7 +986,6 @@ class QiJob:
 
     def _prepare_experiment_params(
         self,
-        controller,
         sample: QiSample | None = None,
         averages: int = 1,
         cell_map: list[int] | None = None,
@@ -922,12 +993,6 @@ class QiJob:
         data_collection=None,
         use_taskrunner=False,
     ):
-        if len(self.cells) > len(controller.cell):
-            raise IndexError(
-                f"This job requires {len(self.cells)} cells but only "
-                f"{len(controller.cell)} are available in the QiController."
-            )
-
         if data_collection is None:
             if self._custom_processing is None:
                 data_collection = "average"
@@ -938,7 +1003,7 @@ class QiJob:
         averages = int(averages)
 
         if sample is None:
-            sample = QiSample(len(controller.cell))
+            sample = QiSample(len(self.cells))
         elif len(sample) < len(self.cells):
             raise ValueError(
                 "Need to submit a QiSample with at least as many cells as the job "
@@ -968,12 +1033,6 @@ class QiJob:
         # Translate cell_map from sample cells ("cells") to QiController cells
         cell_map = [sample.cell_map[c] for c in cell_map]
 
-        if any(c < 0 or c >= len(controller.cell) for c in cell_map):
-            raise ValueError(
-                "The QiSample cell_map can only reference available QiController "
-                f"cells, i.e. between 0 and {len(controller.cell) - 1}."
-            )
-
         self._build_program(sample, cell_map)
 
         for_range_list = []
@@ -982,7 +1041,6 @@ class QiJob:
             for_range_list.append(self.cell_seq_dict[cell]._for_range_list)
 
         return (
-            controller,
             self.cells,
             self.couplers,
             self._get_sequencer_codes(),
@@ -1002,8 +1060,8 @@ class QiJob:
         averages: int = 1,
         cell_map: list[int] | None = None,
         coupling_map: list[int] | None = None,
-        data_collection=None,
-        use_taskrunner=False,
+        data_collection: DataCollection | None = None,
+        use_taskrunner: bool = False,
     ):
         """executes the job and returns the results
 
@@ -1027,6 +1085,50 @@ class QiJob:
             use_taskrunner,
         )
         exp.run()
+
+    def submit(
+        self,
+        controller,
+        sample: QiSample | None = None,
+        averages: int = 1,
+        cell_map: list[int] | None = None,
+        coupling_map: list[int] | None = None,
+        data_collection=None,
+        use_taskrunner=False,
+    ) -> SubmittedJob:
+        """Submits the job to the QiController
+
+        This method is comparabe to :meth:`run`, but doesn't execute instantaneouly.
+        Instead, the pulse is pushed onto an internal queue and executed when no other job is running.
+        This enables multi-user access to the QiController and queuing jobs when network latency becomes
+        a noticeable overhead.
+
+        .. warning::
+            This method is highly experimental and can lead to deadlocks and hanging of the QiController if
+            used incorrectly. It is recommended to use the :meth:`run` method while this is in an experimental state.
+
+        :param controller: the QiController on which the job should be executed
+        :param sample: the QiSample object used for execution of pulses and extracts parameters for the experiment
+        :param averages: the number of executions that should be averaged, by default 1
+        :param cell_map: A list containing the indices of the cells
+        :param cell_map: A list containing the indices of the couplers
+        :param data_collection: the data_collection mode for the result, by default "average"
+        :param use_taskrunner: if the execution should be handled by the Taskrunner
+            Some advanced schemes and data_collection modes are currently only supported
+            by the Taskrunner and not yet by a native control flow.
+        :return: a `SubmittedJob` that can be used to query the results.
+        """
+        exp = self.create_experiment(
+            controller,
+            sample,
+            averages,
+            cell_map,
+            coupling_map,
+            data_collection,
+            use_taskrunner,
+        )
+        job_id = exp.submit()
+        return SubmittedJob(job_id, exp)
 
     def run_with_data_callback(self, on_new_data: Callable[[dict], None]):
         pass

@@ -261,6 +261,9 @@ class QiExpression:
     def __ne__(self, x):
         return QiCondition(self, QiOpCond.NE, QiExpression._from(x))
 
+    def is_dynamic(self) -> bool:
+        return not isinstance(self, (_QiConstValue, QiCellProperty))
+
 
 class _QiVariableBase(QiExpression):
     """Base class for QiVariables.
@@ -351,7 +354,7 @@ class _QiConstValue(QiExpression):
             QiType.PHASE,
             QiType.AMPLITUDE,
         )
-        return self._given_value
+        return float(self._given_value)
 
     @property
     def value(self):
@@ -377,6 +380,12 @@ class _QiConstValue(QiExpression):
         else:
             assert self.type == QiType.FREQUENCY
             return util.conv_freq_to_nco_phase_inc(self._given_value)
+
+    def __int__(self):
+        return self.value
+
+    def __float__(self):
+        return self.float_value
 
     @property
     def contained_variables(self):

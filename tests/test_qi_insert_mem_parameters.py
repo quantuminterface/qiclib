@@ -768,7 +768,7 @@ class TestPlayFrequency:
         assert job.get_assembly() == [
             "tr 0x0, 0x0, 0x0, 0x0, 0x0, 0x0",
             # Initialize r2 to int16 max
-            "lui r2, 32768",
+            "lui r2, 0x8000",
             "addi r2, r2, 0xfff",
             # Intialize r1 to 0
             "addi r1, r0, 0x0",
@@ -779,7 +779,7 @@ class TestPlayFrequency:
             # r4 := r1 | r3
             "or r4, r1, r3",
             # Load address
-            "lui r3, 24576",
+            "lui r3, 0x6000",
             "addi r3, r3, 0x4",
             # Store r4 @ r3
             "sw r4, 0(r3)",
@@ -787,7 +787,7 @@ class TestPlayFrequency:
             "tr 0x0, 0x0, 0x1, 0x0, 0x0, 0x0",
             "wti 0x18",
             # Increase r1 by r3
-            "lui r3, 4096",
+            "lui r3, 0x1000",
             "addi r3, r3, 0xccc",
             "add r1, r1, r3",
             "j -0xb",
@@ -803,7 +803,7 @@ class TestPlayFrequency:
         assert job.get_assembly() == [
             "tr 0x0, 0x0, 0x0, 0x0, 0x0, 0x0",
             # Initialize r2 to int16 max
-            "lui r2, 32768",
+            "lui r2, 0x8000",
             "addi r2, r2, 0xfff",
             # Intialize r1 to 0
             "addi r1, r0, 0x0",
@@ -814,7 +814,7 @@ class TestPlayFrequency:
             # r4 := r1 | r3
             "or r4, r1, r3",
             # Load address
-            "lui r3, 57344",
+            "lui r3, 0x4000",
             "addi r3, r3, 0x4",
             # Store r4 @ r3
             "sw r4, 0(r3)",
@@ -822,7 +822,7 @@ class TestPlayFrequency:
             "tr 0x1, 0x0, 0x0, 0x0, 0x0, 0x0",
             "wti 0x18",
             # Increase r1 by r3
-            "lui r3, 4096",
+            "lui r3, 0x1000",
             "addi r3, r3, 0xccc",
             "add r1, r1, r3",
             "j -0xb",
@@ -838,21 +838,21 @@ class TestPlayFrequency:
         assert job.get_assembly() == [
             "tr 0x0, 0x0, 0x0, 0x0, 0x0, 0x0",
             # Initialize r2 to int16 max
-            "lui r2, 61440",
+            "lui r2, 0xf000",
             "addi r2, r2, 0x476",
             # Intialize r1 to 0
             "addi r1, r0, 0x0",
             # Main loop: branch if greater or equal
             "bge r1, r2, 0xa",
             # Load address
-            "lui r3, 24576",
+            "lui r3, 0x6000",
             "addi r3, r3, 0xc",
             # Store r4 @ r3
             "sw r1, 0(r3)",
             # trigger + wait (play pulse)
             "tr 0x0, 0x0, 0x1, 0x0, 0x0, 0x0",
             "wti 0x18",
-            "lui r3, 12288",
+            "lui r3, 0x3000",
             "addi r3, r3, 0x8be",
             "add r1, r1, r3",
             "j -0x9",
@@ -868,21 +868,21 @@ class TestPlayFrequency:
         assert job.get_assembly() == [
             "tr 0x0, 0x0, 0x0, 0x0, 0x0, 0x0",
             # Initialize r2 to int16 max
-            "lui r2, 61440",
+            "lui r2, 0xf000",
             "addi r2, r2, 0x476",
             # Intialize r1 to 0
             "addi r1, r0, 0x0",
             # Main loop: branch if greater or equal
             "bge r1, r2, 0xa",
             # Load address
-            "lui r3, 57344",
+            "lui r3, 0x4000",
             "addi r3, r3, 0xc",
             # Store r4 @ r3
             "sw r1, 0(r3)",
             # trigger + wait (play pulse)
             "tr 0x1, 0x0, 0x0, 0x0, 0x0, 0x0",
             "wti 0x18",
-            "lui r3, 12288",
+            "lui r3, 0x3000",
             "addi r3, r3, 0x8be",
             "add r1, r1, r3",
             "j -0x9",

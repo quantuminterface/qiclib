@@ -58,9 +58,6 @@ class TestExperiments:
         assert_array_equal(amp, [[1.0], [2.0], [3.0]])
         assert_array_equal(pha, [[4.0], [5.0], [6.0]])
 
-    @pytest.mark.skip(
-        reason="ignoring the error for now as it will become obsolete when the compiler gets pushed to the platform"
-    )
     def test_does_not_raise_warning_when_using_a_variable_frequency(self):
         controller = QiController("IP")
         with QiJob() as job:
@@ -71,20 +68,19 @@ class TestExperiments:
         experiment = job.create_experiment(controller)
         with warnings.catch_warnings(record=True) as w:
             experiment.run()
-            self.assertFalse(
-                [it for it in w if "Readout pulses without frequency" in str(it)],
-                "There should be no warnings about readout pulses without frequency",
+            readout_warnings = [
+                it for it in w if "Readout pulses without frequency" in str(it)
+            ]
+            assert not readout_warnings, (
+                "There should be no warnings about readout pulses without frequency"
             )
 
     def test_raises_warning_when_no_readout_frequency_given(self):
         controller = QiController("IP")
         with QiJob() as job:
             q = QiCells(1)
-            PlayReadout(q[0], QiPulse(12e-9, frequency=30e6))
-            PlayReadout(q[0], QiPulse(12e-9, frequency=15e6))
+            PlayReadout(q[0], QiPulse(12e-9))  # No frequency specified
         experiment = job.create_experiment(controller)
-        print(experiment.qic.readout.internal_frequency)
-        experiment.run()
         with pytest.warns(UserWarning, match="Readout pulses without frequency given"):
             experiment.run()
 

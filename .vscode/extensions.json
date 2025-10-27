@@ -1,7 +1,13 @@
 {
-    "recommendations": [
-        "ms-python.vscode-pylance",
-        "ms-python.python",
-        "njpwerner.autodocstring"
-    ]
+  "recommendations": [
+    "charliermarsh.ruff",
+    "ms-python.python",
+    "ms-python.debugpy",
+    "tamasfe.even-better-toml",
+    "ms-toolsai.jupyter",
+    "donjayamanne.vscode-default-python-kernel",
+    "GitLab.gitlab-workflow",
+    "redhat.vscode-yaml",
+    "zxh404.vscode-proto3"
+  ]
 }

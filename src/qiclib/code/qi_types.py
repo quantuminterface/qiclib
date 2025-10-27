@@ -53,8 +53,23 @@ class QiType(Enum):
     Frequency values can be used in the Play/PlayReadout commands and, like TIME, are specified using floats.
     """
     PHASE = 5
-
+    """
+    Phase values are specified in radians and can be used in the Play/Readout commands
+    """
     AMPLITUDE = 6
+    """
+    Amplitude values are specified in floating point units from 0 to 1 and can be used in the Play/PlayReadout commands
+    """
+
+    @classmethod
+    def convert_from(cls, py_type) -> QiType:
+        if isinstance(py_type, QiType):
+            return py_type
+        if py_type is int:
+            return QiType.NORMAL
+        if py_type is float:
+            return QiType.TIME
+        raise RuntimeError(f"passed type {py_type} cannot be converted to a QiType")
 
 
 class _TypeConstraintReason:
@@ -337,7 +352,7 @@ def add_qi_calc_constraints(
     if op in [QiOp.AND, QiOp.OR, QiOp.XOR]:
         _add_equal_constraints(QiType.STATE, reason, rhs, lhs, res)
 
-    if op == QiOp.PLUS:
+    if op in {QiOp.PLUS, QiOp.MINUS}:
         _add_equal_constraints(QiType.TIME, reason, rhs, lhs, res)
         _add_equal_constraints(QiType.FREQUENCY, reason, rhs, lhs, res)
         _add_equal_constraints(QiType.PHASE, reason, rhs, lhs, res)
@@ -487,8 +502,8 @@ class QiPostTypecheckVisitor(QiJobVisitor):
                 != CONTROLLER_CYCLE_TIME
             ):
                 raise RuntimeError(
-                    f"When using QiTimeVariables define step size as multiple of {CONTROLLER_CYCLE_TIME*1e9:.3g} ns."
-                    f" (It is currently off by {(for_range_cm.step._given_value % CONTROLLER_CYCLE_TIME)*1e9:.3g} ns.)"
+                    f"When using QiTimeVariables define step size as multiple of {CONTROLLER_CYCLE_TIME * 1e9:.3g} ns."
+                    f" (It is currently off by {(for_range_cm.step._given_value % CONTROLLER_CYCLE_TIME) * 1e9:.3g} ns.)"
                 )
         elif (
             for_range_cm.var.type == QiType.FREQUENCY

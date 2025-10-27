@@ -332,11 +332,3 @@ class TaskRunner(PlatformComponent):
                 "The following error messages were retrieved "
                 + "from the Taskrunner:\n{}".format("\n".join(errors))
             )
-
-    # DEPRECATED STUFF
-    @property
-    def data_size(self):
-        """TODO Replace by progress in all experiments."""
-        raise DeprecationWarning(
-            "data_size is not supported anymore! Use task_progress instead!"
-        )

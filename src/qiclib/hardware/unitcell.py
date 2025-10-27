@@ -59,8 +59,9 @@ the same DAC channel for frequency-division-multiplexed readout and control.
 from __future__ import annotations
 
 import sys
-from collections.abc import Mapping
-from typing import TYPE_CHECKING
+from collections.abc import Iterable, Mapping
+from copy import copy
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
@@ -77,6 +78,11 @@ from qiclib.packages.servicehub import ServiceHubCall
 
 if TYPE_CHECKING:
     from qiclib.hardware.controller import QiController
+
+
+DataCollection = Literal[
+    "average", "amp_pha", "iqcloud", "raw", "states", "counts", "quantum_jumps"
+]
 
 
 class UnitCell:
@@ -326,23 +332,14 @@ class UnitCells(PlatformComponent, Mapping):
         self._stub.ClearConverterStatus(dt.Empty())
 
     @ServiceHubCall
-    def run_experiment(
+    def submit(
         self,
+        job: proto.Job,
         averages: int,
         cells: list[int],
         recordings: list[int],
         data_collection: str = "average",
-        progress_callback=None,
-    ):
-        """
-        Runs the experiment on the hardware.
-        Returns an array of the results.
-        The return type of each result depends on the data collection mode:
-
-        - Average, Amplitude & Phase, Raw: A tuple containing the I/Q values as numpy arrays (float type)
-        - IQ Cloud: A tuple containing the I/Q values as numpy arrays (signed integer type)
-        - States, Quantum Jumps, State Count: A single numpy array containing the states (unsigned integer type)
-        """
+    ) -> int:
         switch_dict = {
             "average": proto.AVERAGE,
             "amp_pha": proto.AMPLITUDE_PHASE,
@@ -354,21 +351,27 @@ class UnitCells(PlatformComponent, Mapping):
         }
         mode = switch_dict.get(data_collection)
         if mode is None:
-            raise Warning("Unknown data collection mode " + data_collection)
-        experiment_results = None
-        for progress in self._stub.RunExperiment(
+            raise RuntimeError("Unknown data collection mode " + data_collection)
+        job.parameters.CopyFrom(
             proto.ExperimentParameters(
                 mode=mode,
                 shots=averages,
                 cells=cells,
                 recordings=recordings,
             )
-        ):
-            experiment_results = progress
-            if progress_callback:
-                progress_callback(progress.progress)
-        results = experiment_results.results
-        mode = experiment_results.mode
+        )
+
+        return self._stub.Submit(job).value
+
+    @ServiceHubCall
+    def status(self, job_id: int):
+        return self._stub.GetJobStatus(dt.UInt(value=job_id))
+
+    def _process_results(
+        self,
+        mode: proto.DataCollectionMode,
+        results: Iterable[proto.ExperimentResults.SingleCellResults],
+    ):
         # Convert the proto messages to appropriate arrays
         if mode in {proto.AVERAGE, proto.AMPLITUDE_PHASE, proto.RAW_TRACE}:
             return [
@@ -393,3 +396,69 @@ class UnitCells(PlatformComponent, Mapping):
             ]
         else:
             raise AssertionError("Unknown data collection mode")
+
+    @ServiceHubCall
+    def stream_results(self, job_id: int):
+        from tqdm.notebook import tqdm
+
+        with tqdm() as pbar:
+            current = 0
+            for progress in self._stub.StreamResults(dt.UInt(value=job_id)):
+                experiment_results = progress
+                pbar.total = progress.max_progress
+                pbar.update(progress.progress - current)
+                current = progress.progress
+        results = experiment_results
+        return self._process_results(results.mode, results.results)
+
+    @ServiceHubCall
+    def run_experiment(
+        self,
+        averages: int,
+        cells: list[int],
+        recordings: list[int],
+        data_collection: DataCollection = "average",
+        progress_callback=None,
+    ):
+        """
+        Runs the experiment on the hardware.
+        Returns an array of the results.
+        The return type of each result depends on the data collection mode:
+
+        - Average, Amplitude & Phase, Raw: A tuple containing the I/Q values as numpy arrays (float type)
+        - IQ Cloud: A tuple containing the I/Q values as numpy arrays (signed integer type)
+        - States, Quantum Jumps, State Count: A single numpy array containing the states (unsigned integer type)
+        """
+        switch_dict = {
+            "average": proto.AVERAGE,
+            "amp_pha": proto.AMPLITUDE_PHASE,
+            "iqcloud": proto.IQCLOUD,
+            "raw": proto.RAW_TRACE,
+            "states": proto.STATES,
+            "counts": proto.STATE_COUNT,
+            "quantum_jumps": proto.QM_JUMPS,
+        }
+        mode = switch_dict.get(data_collection)
+        if mode is None:
+            raise Warning("Unknown data collection mode " + data_collection)
+        experiment_results: proto.ExperimentResults = None
+        for progress in self._stub.RunExperiment(
+            proto.ExperimentParameters(
+                mode=mode,
+                shots=averages,
+                cells=cells,
+                recordings=recordings,
+            )
+        ):
+            if len(progress.results) > 0:
+                if experiment_results is None:
+                    experiment_results = copy(progress)
+                else:
+                    for i, result in enumerate(progress.results):
+                        experiment_results.results[i].MergeFrom(result)
+
+            if progress_callback:
+                progress_callback(progress.progress)
+        if experiment_results is None:
+            experiment_results = proto.ExperimentResults()
+        return self._process_results(mode, experiment_results.results)

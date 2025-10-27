@@ -20,6 +20,7 @@ from typing import Any, Callable
 
 import numpy as np
 
+import qiclib.packages.constants as const
 import qiclib.packages.utility as util
 from qiclib.code.qi_types import QiType, _TypeDefiningUse
 from qiclib.code.qi_var_definitions import QiExpression, _QiVariableBase
@@ -94,9 +95,9 @@ class QiPulse:
     def __init__(
         self,
         length: float | _QiVariableBase | str,
-        shape: Shape = ShapeLib.rect,
-        amplitude: float | _QiVariableBase | QiExpression = 1.0,
-        phase: float | _QiVariableBase = 0.0,
+        shape: Shape | None = None,
+        amplitude: float | _QiVariableBase | QiExpression | None = None,
+        phase: float | _QiVariableBase | None = None,
         frequency: float | QiExpression | None = None,
         hold=False,
     ):
@@ -115,9 +116,22 @@ class QiPulse:
             mode = "normal"
 
         self.mode = mode
-        self.shape = shape
-        self.amplitude = amplitude
-        self.phase = phase
+
+        if shape is not None:
+            self.shape = shape
+        else:
+            self.shape = ShapeLib.rect
+
+        if amplitude is not None:
+            self.amplitude = amplitude
+        else:
+            self.amplitude = 1.0
+
+        if phase is not None:
+            self.phase = phase
+        else:
+            self.phase = 0.0
+
         if isinstance(self.phase, QiExpression):
             self.phase._type_info.set_type(QiType.PHASE, _TypeDefiningUse.PULSE_PHASE)
         self.frequency = (
@@ -144,7 +158,7 @@ class QiPulse:
 
         if isinstance(length, _QiVariableBase):
             self.var_dict["length"] = length
-            if shape != ShapeLib.rect:
+            if self.shape != ShapeLib.rect:
                 raise NotImplementedError(
                     "Variable pulse lengths are only supported for rectangular pulses"
                 )
@@ -188,11 +202,10 @@ class QiPulse:
         return self._length == other._length
 
     def _are_same_amplitude(self, other: QiPulse) -> bool:
-        return (
-            not isinstance(self.amplitude, _QiVariableBase)
-            and not isinstance(other.amplitude, _QiVariableBase)
-            and (self.amplitude == other.amplitude)
-        )
+        if isinstance(self.amplitude, QiExpression):
+            return self.amplitude._equal_syntax(other.amplitude)
+        else:
+            return self.amplitude == other.amplitude
 
     def __eq__(self, o: object) -> bool:
         if not isinstance(o, QiPulse):
@@ -247,6 +260,8 @@ class QiPulse:
             self.amplitude, _QiVariableBase
         ):  # amplitude must be set to 1 for variable amplitude and take the value of self.amplitude otherwise
             amplitude = 1
+        elif isinstance(self.amplitude, QiCellProperty):
+            amplitude = self.amplitude()
         else:
             amplitude = self.amplitude
 
@@ -263,6 +278,21 @@ class QiPulse:
         time_fractions = np.arange(0, length, timestep) / length
 
         envelope = amplitude * self.shape(time_fractions)
+
+        # Check if amplitude is too low and might vanish due to 16-bit quantization
+        if self.mode != "off" and len(envelope) > 0:
+            max_amplitude = np.max(np.abs(envelope))
+            min_representable_amplitude = 1.0 / const.CONTROLLER_AMPLITUDE_MAX_VALUE
+            if max_amplitude < min_representable_amplitude:
+                import warnings
+
+                warnings.warn(
+                    f"Pulse amplitude ({max_amplitude:.2e}) is below the minimum representable value "
+                    f"({min_representable_amplitude:.2e}) for 16-bit quantization and will vanish "
+                    f"when converted to hardware format.",
+                    UserWarning,
+                )
+
         return envelope
 
     @property
@@ -287,11 +317,11 @@ class QiPulse:
         else:
             arg_strings.append(f'"{self.mode}"')
 
-        if self.shape != defaults[0]:
+        if self.shape != ShapeLib.rect:
             arg_strings.append(f"shape={self.shape}")
-        if not _equal(self.amplitude, defaults[1]) and self.mode != "off":
+        if not _equal(self.amplitude, 1.0) and self.mode != "off":
             arg_strings.append(f"amplitude={self.amplitude}")
-        if not _equal(self.phase, defaults[2]):
+        if not _equal(self.phase, 0.0):
             arg_strings.append(f"phase={self.phase}")
         if not _equal(self.frequency, defaults[3]):
             arg_strings.append(f"frequency={self.frequency}")

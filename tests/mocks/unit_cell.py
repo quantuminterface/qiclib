@@ -40,13 +40,19 @@ class MockUnitCellServiceStub:
                 progress=prog,
                 max_progress=10,
                 finished=prog == 10,
-                results=[
-                    ExperimentResults.SingleCellResults(
-                        data_double_1=[1, 2, 3], data_double_2=[4, 5, 6]
-                    )
-                ],
+                results=[],
             )
-            for prog in [0, 5, 10]
+            for prog in [0, 5]
+        )
+        yield ExperimentResults(
+            progress=10,
+            max_progress=10,
+            finished=True,
+            results=[
+                ExperimentResults.SingleCellResults(
+                    data_double_1=[1, 2, 3], data_double_2=[4, 5, 6]
+                )
+            ],
         )
 
     def GetBusyCells(self, _):
