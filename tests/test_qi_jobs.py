@@ -1331,3 +1331,28 @@ def test_nested_parallel_blocks():
             with Parallel():
                 with Parallel():  # This should fail - nested parallel not allowed
                     PlayReadout(q[0], QiPulse(length=50e-9))
+
+
+def test_for_within_if():
+    with QiJob() as job:
+        q = QiCells(1)
+        a = QiVariable(int)
+        b = QiVariable(int, value=1)
+        with If(b == 1):
+            with ForRange(a, 0, 10):
+                Recording(q[0], duration=1e-6)
+
+    assert job.get_assembly() == [
+        "tr 0x0, 0x0, 0x0, 0x0, 0x0, 0x0",
+        "addi r2, r0, 0x1",
+        "addi r3, r0, 0x1",
+        "bne r2, r3, 0x8",
+        "addi r3, r0, 0xa",
+        "addi r1, r0, 0x0",
+        "bge r1, r3, 0x5",
+        "tr 0x0, 0x2, 0x0, 0x0, 0x0, 0x0",
+        "wti 0xfa",
+        "addi r1, r1, 0x1",
+        "j -0x4",
+        "end",
+    ]

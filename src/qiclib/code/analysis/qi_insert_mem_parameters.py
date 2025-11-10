@@ -385,6 +385,17 @@ class MemoryParameterVisitor(QiCommandVisitor):
                 self.mem_param_values[cell] = Multiple
 
 
+def find_all_memory_parameters(
+    command: QiCommand, config: InsertMemoryParameterConfiguration
+) -> dict[QiCell, QiExpression | Multiple]:
+    """
+    Finds all expressions that contain a certain memory parameter, such as frequency, amplitude, offset, ...
+    """
+    visitor = MemoryParameterVisitor(config)
+    command.accept(visitor)
+    return visitor.mem_param_values
+
+
 class _MemoryParameterConstantVisitor(QiCommandVisitor):
     """Checks if a given memory parameter is constant."""
 
@@ -413,7 +424,7 @@ class _MemoryParameterConstantVisitor(QiCommandVisitor):
         if mem_param is IrrelevantCommand:
             return
 
-        if isinstance(mem_param, (_QiConstValue, QiCellProperty)):
+        if isinstance(mem_param, _QiConstValue | QiCellProperty):
             if self.found_memory_param is None:
                 self.found_memory_param = mem_param
             else:
@@ -439,7 +450,10 @@ def _has_cell_constant_recording_offset(
 
 
 class ExpressionInvariantVisitor(QiCommandVisitor):
-    """Checks if an expression in not invalidated (changed) in the visited commands."""
+    """
+    Checks if an expression in not invalidated (changed) in the visited commands.
+    "Does an expression depend on any variables that get modified, declared, or redefined in a sequence of commands (including inside loops or branches)?"
+    """
 
     def __init__(self, expr: QiExpression):
         self.expr = expr
@@ -482,6 +496,15 @@ class ExpressionInvariantVisitor(QiCommandVisitor):
         self.visit_context_manager(while_cm)
 
 
+def expression_changes_within(command: QiCommand, expr: QiExpression) -> bool:
+    """
+    Checks whether `expr` changes within `command`, recursing within the body of the command if the command has one.
+    """
+    visitor = ExpressionInvariantVisitor(expr)
+    command.accept(visitor)
+    return not visitor.result
+
+
 def _insert_pseudo_command_before_for_loop(
     cfg: _CFG, for_loop: _CFGNode, pseudo_command: QiCommand
 ):
@@ -512,7 +535,7 @@ def _insert_pseudo_command_before_for_loop(
         pseudo_command,
         for_loop.instruction_index,
         for_loop.instruction_index,
-        *command_preds,
+        command_preds,
     )
 
     cfg.nodes.add(pseudo_command_node)
@@ -539,26 +562,25 @@ def _add_pseudo_store_instructions(
     # are changed in the for loop body.
     # If so place such a store command before the for loop
 
-    for_loops = [
-        x
-        for x in cfg.nodes
-        if x.type == _CFGNode.Type.COMMAND and isinstance(x.command, ForRangeCommand)
-    ]
+    def is_for_loop(node: _CFGNode):
+        return node.type == _CFGNode.Type.COMMAND and isinstance(
+            node.command, ForRangeCommand
+        )
+
+    # Collect all For loops within the CFG
+    for_loops = list(filter(is_for_loop, cfg.nodes))
 
     for for_loop in for_loops:
-        collected_offsets = MemoryParameterVisitor(configuration)
-        for_loop.command.accept(collected_offsets)
+        parameters = find_all_memory_parameters(for_loop.command, configuration)
 
-        for cell, mem_param in collected_offsets.mem_param_values.items():
+        for cell, mem_param in parameters.items():
             # Multiple different offsets for cell => Don't insert pseudo store command.
             if mem_param is Multiple:
                 continue
 
-            expression_invariant = ExpressionInvariantVisitor(mem_param)
-
-            for_loop.command.accept(expression_invariant)
-
-            if expression_invariant.result:
+            # Check whether an expression changes within the for loop.
+            # If not, we can insert a store command before the loop.
+            if not expression_changes_within(for_loop.command, expr=mem_param):
                 # Insert pseudo command
                 pseudo_command = MemStoreCommand(
                     cell, configuration.recording_module_address, mem_param
@@ -664,7 +686,7 @@ def _insert_memory_parameter_store_commands(
             )
             if mem_param.type == FlatLatticeValue.Type.VALUE:
                 mem_param = mem_param.value
-                assert isinstance(mem_param, (_QiConstValue, QiCellProperty)), (
+                assert isinstance(mem_param, _QiConstValue | QiCellProperty), (
                     f"mem_param is {mem_param}, but should be constant."
                 )
                 configuration.initialize_constant_property(cell, mem_param)

@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import math
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, fields
-from typing import Callable
 
 import numpy as np
 
@@ -81,7 +81,8 @@ class QiCodeExperiment(BaseExperiment):
         controller: QiController,
         cell_list: list[QiCell],
         couplers: list[QiCoupler],
-        sequencer_codes,
+        sequencer_codes: list[list[int]],
+        initial_memory: list[list[int]],
         averages: int = 1,
         for_range_list=[],
         cell_map: list[int] | None = None,
@@ -94,7 +95,8 @@ class QiCodeExperiment(BaseExperiment):
         self.couplers = couplers
         # The Variables for calculating a parametrized Pulse.
         super().__init__(controller)
-        self._seq_instructions = sequencer_codes
+        self._seq_instructions: list[list[int]] = sequencer_codes
+        self._initial_memory: list[list[int]] = initial_memory
         self.averages = averages
         self.for_range_list = for_range_list
         self.cell_map = cell_map
@@ -304,6 +306,8 @@ class QiCodeExperiment(BaseExperiment):
         """
         for index, _, qic_cell in self.cell_iterator():
             qic_cell.sequencer.load_program_code(self._seq_instructions[index])
+            if len(self._initial_memory[index]) > 0:
+                qic_cell.storage.write_raw_memory(0, self._initial_memory[index])
 
         # Update the string representation of the last job in the QiController
         self.qic._last_qijob = self._job_representation
@@ -462,7 +466,7 @@ class QiCodeExperiment(BaseExperiment):
         return result
 
     def _record_internal(self):
-        for _, _, qic_cell in self.cell_iterator():
+        for _, qi_cell, qic_cell in self.cell_iterator():
             qic_cell.sequencer.averages = 1
             qic_cell.sequencer.start_address = 0
 

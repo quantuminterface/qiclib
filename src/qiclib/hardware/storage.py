@@ -191,6 +191,20 @@ class Storage(PlatformComponent):
     def memory(self):
         return self._bram
 
+    def read_raw_memory(self, address: int, count: int) -> list[int]:
+        return list(
+            self._stub.ReadData(
+                proto.ReadDataRequest(
+                    index=self._component, address=address, count=count
+                )
+            ).data
+        )
+
+    def write_raw_memory(self, address: int, values: list[int]):
+        self._stub.WriteData(
+            proto.WriteDataRequest(index=self._component, address=address, data=values)
+        )
+
     def get_configuration_dict(self):
         configuration_dict = {
             "averaged_handling": self.averaged_handling,

@@ -16,14 +16,19 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 
 import qiclib.packages.constants as const
 import qiclib.packages.utility as util
 from qiclib.code.qi_types import QiType, _TypeDefiningUse
-from qiclib.code.qi_var_definitions import QiExpression, _QiVariableBase
+from qiclib.code.qi_var_definitions import (
+    QiExpression,
+    QiVariableSet,
+    _QiVariableBase,
+)
 
 
 class Shape(np.vectorize):
@@ -94,15 +99,13 @@ class QiPulse:
 
     def __init__(
         self,
-        length: float | _QiVariableBase | str,
+        length: float | QiExpression | str,
         shape: Shape | None = None,
         amplitude: float | _QiVariableBase | QiExpression | None = None,
         phase: float | _QiVariableBase | None = None,
         frequency: float | QiExpression | None = None,
         hold=False,
     ):
-        from .qi_jobs import QiCellProperty
-
         if isinstance(length, str):
             mode = length.lower()
             if mode not in ["cw", "off"]:
@@ -132,8 +135,11 @@ class QiPulse:
         else:
             self.phase = 0.0
 
+        self.associated_variables = QiVariableSet()
+
         if isinstance(self.phase, QiExpression):
             self.phase._type_info.set_type(QiType.PHASE, _TypeDefiningUse.PULSE_PHASE)
+            self.associated_variables.update(self.phase.contained_variables)
         self.frequency = (
             QiExpression._from(frequency) if frequency is not None else None
         )
@@ -141,7 +147,7 @@ class QiPulse:
             self.frequency._type_info.set_type(
                 QiType.FREQUENCY, _TypeDefiningUse.PULSE_FREQUENCY
             )
-        self.var_dict = {}
+            self.associated_variables.update(self.frequency.contained_variables)
 
         self._length = length
 
@@ -152,19 +158,16 @@ class QiPulse:
             self.amplitude._type_info.set_type(
                 QiType.AMPLITUDE, _TypeDefiningUse.PULSE_AMPLITUDE
             )
+            self.associated_variables.update(self.amplitude.contained_variables)
 
         if isinstance(length, QiExpression):
             length._type_info.set_type(QiType.TIME, _TypeDefiningUse.PULSE_LENGTH)
-
-        if isinstance(length, _QiVariableBase):
-            self.var_dict["length"] = length
+            self.associated_variables.update(length.contained_variables)
             if self.shape != ShapeLib.rect:
                 raise NotImplementedError(
                     "Variable pulse lengths are only supported for rectangular pulses"
                 )
-        elif isinstance(length, QiCellProperty):
-            pass
-        elif util.conv_time_to_cycles(length) >= 2**32:
+        elif isinstance(length, float) and util.conv_time_to_cycles(length) >= 2**32:
             raise RuntimeError(
                 f"Pulse length exceeds possible wait time, cycles {util.conv_time_to_cycles(length)}"
             )
@@ -240,11 +243,11 @@ class QiPulse:
             self._length() if isinstance(self._length, QiCellProperty) else self._length
         )
 
-        if isinstance(length, _QiVariableBase):
+        if isinstance(length, QiExpression) and length.is_dynamic():
             # variable pulses are hold till ended by another pulse, so no need to use correct length
             return np.array([self.amplitude] * 4)
 
-        if not isinstance(length, (float, int)):
+        if not isinstance(length, float | int):
             raise ValueError(
                 f"spcified length must be a number (was {type(length).__name__})"
             )
@@ -296,16 +299,16 @@ class QiPulse:
         return envelope
 
     @property
-    def length(self) -> _QiVariableBase:
-        return self.var_dict.get("length", self._length)
+    def length(self) -> QiExpression | float | str:
+        return self._length
 
     @property
     def variables(self):
-        return list(self.var_dict.values())
+        return self.associated_variables
 
     @property
     def is_variable_length(self):
-        return isinstance(self._length, _QiVariableBase)
+        return isinstance(self._length, QiExpression) and self._length.is_dynamic()
 
     def _stringify_args(self) -> str:
         """Determines non-default args to explicitly stringify"""

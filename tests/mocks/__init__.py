@@ -61,6 +61,7 @@ from mocks import (
     rfdc,
     sequencer,
     servicehub_control,
+    storage,
     taskrunner,
     unit_cell,
 )
@@ -75,6 +76,7 @@ __all__ = [
     "rfdc",
     "sequencer",
     "servicehub_control",
+    "storage",
     "taskrunner",
     "unit_cell",
 ]

@@ -392,12 +392,12 @@ class BaseExperiment:
         """
         if state is not None and state != 0 and state != 1:
             raise ValueError("Parameter `state` needs to be either 0, 1 or None.")
-        if not isinstance(delay, (float, int)) or delay < 0:
+        if not isinstance(delay, float | int) or delay < 0:
             raise ValueError(
                 "Parameter `delay` needs to be a non-negative time in seconds."
             )
         if repetition_time is not None and (
-            not isinstance(repetition_time, (float, int)) or repetition_time < 0
+            not isinstance(repetition_time, float | int) or repetition_time < 0
         ):
             raise ValueError(
                 "Parameter `repetition_time` needs to be None or a non-negative time in seconds."

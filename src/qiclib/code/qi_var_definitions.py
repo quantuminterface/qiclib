@@ -25,13 +25,19 @@ from __future__ import annotations
 
 import itertools
 from abc import abstractmethod
-from collections.abc import Set
+from collections.abc import Iterable, Set
 from enum import Enum
 
 import qiclib.packages.utility as util
 from qiclib.code.qi_visitor import QiExpressionVisitor
 
-from .qi_types import QiType, _IllegalTypeReason, _TypeDefiningUse, _TypeInformation
+from .qi_types import (
+    QiType,
+    _IllegalTypeReason,
+    _TypeDefiningUse,
+    _TypeInformation,
+    add_qi_index_constraints,
+)
 
 
 class QiOp(Enum):
@@ -105,13 +111,13 @@ class QiExpression:
         self._type_info = _TypeInformation(self)
 
     @property
-    def type(self):
+    def type(self) -> QiType:
         return self._type_info.type
 
     @staticmethod
     def _from(x):
         """Creates an instance of QiExpression of the provided argument if possible."""
-        if isinstance(x, (float, int)):
+        if isinstance(x, float | int):
             return _QiConstValue(x)
         elif isinstance(x, QiExpression):
             return x
@@ -125,7 +131,7 @@ class QiExpression:
         )
 
     @property
-    def contained_variables(self):
+    def contained_variables(self) -> QiVariableSet:
         """Returns the variables used in this expression.
         QiExpression subclasses which contain variables (_QiCalcBase and _QiVariableBase) need to overwrite this.
         """
@@ -262,7 +268,7 @@ class QiExpression:
         return QiCondition(self, QiOpCond.NE, QiExpression._from(x))
 
     def is_dynamic(self) -> bool:
-        return not isinstance(self, (_QiConstValue, QiCellProperty))
+        return not isinstance(self, _QiConstValue | QiCellProperty)
 
 
 class _QiVariableBase(QiExpression):
@@ -277,22 +283,28 @@ class _QiVariableBase(QiExpression):
     def __init__(
         self,
         type: QiType,
-        value: int | float | None = None,
+        value: int | float | Iterable[int | float] | None = None,
         name=None,
     ):
         from qiclib.code.qi_jobs import QiCell
 
         assert isinstance(type, QiType)
-        assert value is None or isinstance(value, (int, float))
 
         super().__init__()
 
         if type != QiType.UNKNOWN:
             self._type_info.set_type(type, _TypeDefiningUse.VARIABLE_DEFINITION)
 
-        self.value = value
-
-        self._value = value
+        if isinstance(value, int | float):
+            self._value = _QiConstValue(value)
+        elif type.is_array() and value is not None:
+            assert isinstance(value, Iterable), (
+                "Array type without iterable initial value"
+            )
+            self._value = list(value)
+        else:
+            assert value is None
+            self._value = None
         self._relevant_cells: set[QiCell] = set()
         self.id = next(_QiVariableBase.id_iter)
         self.str_id = next(_QiVariableBase.str_id_iter)
@@ -302,7 +314,7 @@ class _QiVariableBase(QiExpression):
         self.name = name
 
     @property
-    def contained_variables(self):
+    def contained_variables(self) -> QiVariableSet:
         return self._contained_variables
 
     @staticmethod
@@ -315,11 +327,33 @@ class _QiVariableBase(QiExpression):
     def _equal_syntax(self, other: QiExpression) -> bool:
         return isinstance(other, _QiVariableBase) and self.id == other.id
 
+    @property
+    def value(self) -> int | list[int | float] | None:
+        if isinstance(self._value, _QiConstValue):
+            return self._value.value
+        elif isinstance(self._value, list):
+            return self._value
+        else:
+            return None
+
+    def __getitem__(self, index) -> QiIndexed:
+        return QiIndexed(self, QiExpression._from(index))
+
     def __hash__(self) -> int:
         return self.id
 
     def __str__(self) -> str:
         return f"QiVariable({self.name or ''})"
+
+
+class _QiStaticVariable(_QiVariableBase):
+    def __init__(
+        self,
+        type: QiType,
+        value: int | float | None = None,
+        name=None,
+    ):
+        super().__init__(type, value, name)
 
 
 class _QiConstValue(QiExpression):
@@ -357,7 +391,7 @@ class _QiConstValue(QiExpression):
         return float(self._given_value)
 
     @property
-    def value(self):
+    def value(self) -> int:
         """
         Integer representation of the constant value.
         Since the sequencer doesn't have a floating point unit, any calculations has to be using integers.
@@ -370,7 +404,7 @@ class _QiConstValue(QiExpression):
             QiType.STATE,
             QiType.UNKNOWN,
         ):
-            return self._given_value
+            return self._given_value  # type: ignore
         elif self.type == QiType.TIME:
             return int(util.conv_time_to_cycles(self._given_value, "ceil"))
         elif self.type == QiType.PHASE:
@@ -388,7 +422,7 @@ class _QiConstValue(QiExpression):
         return self.float_value
 
     @property
-    def contained_variables(self):
+    def contained_variables(self) -> QiVariableSet:
         return QiVariableSet()
 
     def accept(self, visitor: QiExpressionVisitor):
@@ -513,7 +547,7 @@ class QiCellProperty(QiExpression):
         visitor.visit_cell_property(self)
 
     @property
-    def contained_variables(self):
+    def contained_variables(self) -> QiVariableSet:
         return QiVariableSet()
 
     def _equal_syntax(self, other: QiExpression) -> bool:
@@ -598,7 +632,7 @@ class _QiCalcBase(QiExpression):
         add_qi_calc_constraints(op, val1, val2, self)
 
     @property
-    def contained_variables(self):
+    def contained_variables(self) -> QiVariableSet:
         """Function traverses the operation tree to determine which QiVariables are used for the calculations.
         Found QiVariables are added to _contained_variables"""
         if len(self._contained_variables) == 0:
@@ -619,6 +653,43 @@ class _QiCalcBase(QiExpression):
 
     def __str__(self):
         return f"({self.val1} {self.op.value} {self.val2})"
+
+
+class QiIndexed(QiExpression):
+    def __init__(self, base: _QiVariableBase, index: QiExpression):
+        super().__init__()
+        self.base = base
+        self.base._type_info.set_type(
+            QiType.ARRAY(element_type=QiType.UNKNOWN), _TypeDefiningUse.INDEX
+        )
+        self.index = index
+        self.index._type_info.set_type(QiType.NORMAL, _TypeDefiningUse.INDEX)
+        add_qi_index_constraints(base, self)
+
+    @property
+    def type(self):
+        return self._type_info.type
+
+    @property
+    def contained_variables(self) -> QiVariableSet:
+        if len(self._contained_variables) == 0:
+            self._contained_variables.update(self.base.contained_variables)
+            self._contained_variables.update(self.index.contained_variables)
+
+        return self._contained_variables
+
+    def accept(self, visitor: QiExpressionVisitor):
+        visitor.visit_indexed(self)
+
+    def _equal_syntax(self, other: QiExpression) -> bool:
+        if not isinstance(other, QiIndexed):
+            return False
+        return self.base._equal_syntax(other.base) and self.index._equal_syntax(
+            other.index
+        )
+
+    def __str__(self) -> str:
+        return f"{self.base}[{self.index}]"
 
 
 class QiCondition:
@@ -642,14 +713,14 @@ class QiCondition:
         add_qi_condition_constraints(op, val1, val2)
 
     @property
-    def contained_variables(self):
+    def contained_variables(self) -> QiVariableSet:
         if len(self._contained_variables) == 0:
             self._contained_variables.update(self.val1.contained_variables)
             self._contained_variables.update(self.val2.contained_variables)
 
         return self._contained_variables
 
-    def accept(self, visitor):
+    def accept(self, visitor: QiExpressionVisitor):
         visitor.visit_condition(self)
 
     def __str__(self) -> str:

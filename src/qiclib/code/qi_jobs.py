@@ -24,8 +24,8 @@ from __future__ import annotations
 import functools
 import warnings
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, Callable, Generic, TypeVar
+from collections.abc import Callable, Iterable
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 import numpy as np
 
@@ -65,6 +65,7 @@ from qiclib.code.qi_var_definitions import (
     QiCondition,
     QiExpression,
     _QiConstValue,
+    _QiStaticVariable,
     _QiVariableBase,
 )
 from qiclib.code.qi_visitor import (
@@ -726,24 +727,31 @@ class While(_QiContextManager[WhileCommand]):
         QiJob.current()._add_command(self._command)
 
 
-class QiVariable(_QiVariableBase):
+def QiVariable(
+    type: QiType | type[int] | type[float] = QiType.UNKNOWN,
+    value=None,
+    name=None,
+    static: bool = False,
+) -> _QiVariableBase:
     """Used as variables for use in program.
     If no type is provided as an argument, it will infer its type.
     """
+    qi_type = QiType.convert_from(type)
+    if qi_type == QiType.UNKNOWN and isinstance(value, Iterable):
+        value = list(value)
+        qi_type = QiType.ARRAY(element_type=QiType.UNKNOWN, shape=(len(value),))
 
-    def __init__(
-        self,
-        type: QiType | type[int] | type[float] = QiType.UNKNOWN,
-        value=None,
-        name=None,
-    ) -> None:
-        qi_type = QiType.convert_from(type)
-        super().__init__(qi_type, value, name=name)
-        QiJob.current()._add_command(DeclareCommand(self))
-        if self.value is not None:
-            val = _QiConstValue(self.value)
-            val._type_info.set_type(qi_type, _TypeDefiningUse.VARIABLE_DEFINITION)
-            QiJob.current()._add_command(AssignCommand(self, val))
+    if static:
+        variable = _QiStaticVariable(qi_type, value, name)
+    else:
+        variable = _QiVariableBase(qi_type, value, name)
+
+    QiJob.current()._add_command(DeclareCommand(variable))
+    if value is not None and not static and not qi_type.is_array():
+        val = _QiConstValue(value)
+        val._type_info.set_type(qi_type, _TypeDefiningUse.VARIABLE_DEFINITION)
+        QiJob.current()._add_command(AssignCommand(variable, val))
+    return variable
 
 
 class SubmittedJob:
@@ -936,13 +944,10 @@ class QiJob:
         self._build_done = True
 
     def _get_sequencer_codes(self):
-        return [
-            [
-                instr.get_riscv_instruction()
-                for instr in self.cell_seq_dict[cell].instruction_list
-            ]
-            for cell in self.cells
-        ]
+        return [self.cell_seq_dict[cell].executable() for cell in self.cells]
+
+    def _get_initial_memory(self):
+        return [self.cell_seq_dict[cell].static_region for cell in self.cells]
 
     def create_experiment(
         self,
@@ -1044,6 +1049,7 @@ class QiJob:
             self.cells,
             self.couplers,
             self._get_sequencer_codes(),
+            self._get_initial_memory(),
             averages,
             for_range_list,
             cell_map,
@@ -1331,7 +1337,7 @@ def DigitalTrigger(
     QiJob.current()._add_command(DigitalTriggerCommand(cell, list(outputs), length))
 
 
-def Wait(cell: QiCell, delay: int | float | _QiVariableBase | QiCellProperty):
+def Wait(cell: QiCell, delay: int | float | QiExpression):
     """Add Wait command to cell. delay can be int or QiVariable
 
     :param cell: the QiCell that should wait
@@ -1391,31 +1397,25 @@ def QiGate(func):
     return wrapper_QiGate
 
 
-class QiTimeVariable(QiVariable):
-    def __init__(self, value=None, name=None):
-        super().__init__(type=QiType.TIME, value=value, name=name)
+def QiTimeVariable(value=None, name=None, static: bool = False):
+    return QiVariable(type=QiType.TIME, value=value, name=name, static=static)
 
 
-class QiFrequencyVariable(QiVariable):
-    def __init__(self, value=None, name=None):
-        super().__init__(type=QiType.FREQUENCY, value=value, name=name)
+def QiFrequencyVariable(value=None, name=None, static: bool = False):
+    return QiVariable(type=QiType.FREQUENCY, value=value, name=name, static=static)
 
 
-class QiStateVariable(QiVariable):
-    def __init__(self, name=None):
-        super().__init__(type=QiType.STATE, name=name)
+def QiStateVariable(name=None, static: bool = False):
+    return QiVariable(type=QiType.STATE, name=name, static=static)
 
 
-class QiIntVariable(QiVariable):
-    def __init__(self, value=None, name=None):
-        super().__init__(type=QiType.NORMAL, value=value, name=name)
+def QiIntVariable(value=None, name=None, static: bool = False):
+    return QiVariable(type=QiType.NORMAL, value=value, name=name, static=static)
 
 
-class QiPhaseVariable(QiVariable):
-    def __init__(self, value=None, name=None):
-        super().__init__(type=QiType.PHASE, value=value, name=name)
+def QiPhaseVariable(value=None, name=None, static: bool = False):
+    return QiVariable(type=QiType.PHASE, value=value, name=name, static=static)
 
 
-class QiAmplitudeVariable(QiVariable):
-    def __init__(self, value=None, name=None):
-        super().__init__(type=QiType.AMPLITUDE, value=value, name=name)
+def QiAmplitudeVariable(value=None, name=None, static: bool = False):
+    return QiVariable(type=QiType.AMPLITUDE, value=value, name=name, static=static)

@@ -132,9 +132,9 @@ def test_contradictory_types():
 
         with pytest.raises(
             TypeError,
-            match="QiVariable\\(\\) was of type QiType.TIME\\n"
+            match="QiVariable\\(\\) was of type TIME\\n"
             + "\\(because it is used as length in wait command\\)\\n"
-            + "but is also used as type QiType.STATE\\n"
+            + "but is also used as type STATE\\n"
             + r"\(because it is used as save_to of recording command\)",
         ):
             Recording(cells[0], 20e-9, state_to=x)
@@ -286,7 +286,7 @@ def test_illegal_type_error():
         with ForRange(x, 1, 10, 1):
             with pytest.raises(
                 TypeError,
-                match="QiVariable\\(X\\) can not have QiType.STATE\\n"
+                match="QiVariable\\(X\\) can not have STATE\\n"
                 + "\\(because ForRanges can only iterate over TIME or NORMAL values\\)\\n"
                 + "but the type is required.\\n"
                 + r"\(because it is used as save_to of recording command\)",
@@ -332,14 +332,14 @@ def test_large_equality_chain_error():
 
         with pytest.raises(
             TypeError,
-            match="QiVariable\\(Z\\) was of type QiType.TIME\\n"
+            match="QiVariable\\(Z\\) was of type TIME\\n"
             + "\\(because it is used as length in wait command\\)\\n"
-            + "but is also used as type QiType.NORMAL\\n"
-            + "\\(because it is used in QiOp.MULT calculation of type QiType.TIME\\n"
-            + "\\(because QiVariable\\(W\\) has type QiType.TIME\\n"
-            + "\\(because it is compared with QiVariable\\(X\\) with type QiType.TIME\\n"
-            + "\\(because QiVariable\\(X\\) is compared with QiVariable\\(Y\\) with type QiType.TIME\\n"
-            + "\\(because QiVariable\\(Y\\) is compared with QiVariable\\(Z\\) with type QiType.TIME\\n"
+            + "but is also used as type NORMAL\\n"
+            + "\\(because it is used in QiOp.MULT calculation of type TIME\\n"
+            + "\\(because QiVariable\\(W\\) has type TIME\\n"
+            + "\\(because it is compared with QiVariable\\(X\\) with type TIME\\n"
+            + "\\(because QiVariable\\(X\\) is compared with QiVariable\\(Y\\) with type TIME\\n"
+            + "\\(because QiVariable\\(Y\\) is compared with QiVariable\\(Z\\) with type TIME\\n"
             + r"\(because QiVariable\(Z\) is used as length in wait command\)\)\)\)\)\)",
         ):
             Wait(cells[0], z)
@@ -362,16 +362,16 @@ def test_expression_error():
 
         with pytest.raises(
             TypeError,
-            match="QiVariable\\(I\\) was of type QiType.NORMAL\\n"
+            match="QiVariable\\(I\\) was of type NORMAL\\n"
             + "\\(because it has been defined by the user as this type\\)\\n"
-            + "but is also used as type QiType.TIME\\n"
-            + "\\(because it is used in ForRange over type QiType.TIME\\n"
-            + "\\(because 1 is used in ForRange over type QiType.TIME\\n"
-            + "\\(because QiVariable\\(Y\\) is used in QiOp.PLUS calculation of type QiType.TIME\\n"
-            + "\\(because \\(QiVariable\\(Z\\) \\+ QiVariable\\(Y\\)\\) is used in QiOp.PLUS calculation of type QiType.TIME\\n"
-            + "\\(because QiVariable\\(Z\\) is used in Assign command with type QiType.TIME\\n"
-            + "\\(because \\(\\(QiVariable\\(X\\) \\+ 23\\) \\* 4\\) is used in QiOp.MULT calculation of type QiType.TIME\\n"
-            + "\\(because 4 has type QiType.TIME\\n"
+            + "but is also used as type TIME\\n"
+            + "\\(because it is used in ForRange over type TIME\\n"
+            + "\\(because 1 is used in ForRange over type TIME\\n"
+            + "\\(because QiVariable\\(Y\\) is used in QiOp.PLUS calculation of type TIME\\n"
+            + "\\(because \\(QiVariable\\(Z\\) \\+ QiVariable\\(Y\\)\\) is used in QiOp.PLUS calculation of type TIME\\n"
+            + "\\(because QiVariable\\(Z\\) is used in Assign command with type TIME\\n"
+            + "\\(because \\(\\(QiVariable\\(X\\) \\+ 23\\) \\* 4\\) is used in QiOp.MULT calculation of type TIME\\n"
+            + "\\(because 4 has type TIME\\n"
             + r"\(because it has been defined by the user as this type\)\)\)\)\)\)\)\)",
         ):
             with ForRange(QiIntVariable(name="I"), 0, y, 1):
@@ -381,10 +381,10 @@ def test_expression_error():
 def test_simple_error():
     with pytest.raises(
         TypeError,
-        match="42 can not have QiType.NORMAL\\n"
+        match="42 can not have NORMAL\\n"
         + "\\(because constant float values can not be of type NORMAL\\)\\n"
         + "but the type is required.\\n"
-        + "\\(because it is used in Assign command with type QiType.NORMAL\\n"
+        + "\\(because it is used in Assign command with type NORMAL\\n"
         + r"\(because QiVariable\(I\) has been defined by the user as this type\)\)",
     ):
         with QiJob():
@@ -400,13 +400,13 @@ def test_integer_multiplication():
 
         with pytest.raises(
             TypeError,
-            match="\\(QiVariable\\(X\\) \\* QiVariable\\(Y\\)\\) was of type QiType.NORMAL\\n"
-            + "\\(because it is used in QiOp.MULT calculation of type QiType.NORMAL\\n"
-            + "\\(because QiVariable\\(Y\\) has type QiType.NORMAL\\n"
+            match="\\(QiVariable\\(X\\) \\* QiVariable\\(Y\\)\\) was of type NORMAL\\n"
+            + "\\(because it is used in QiOp.MULT calculation of type NORMAL\\n"
+            + "\\(because QiVariable\\(Y\\) has type NORMAL\\n"
             + "\\(because it has been defined by the user as this type\\)\\n"
-            + "and QiVariable\\(X\\) has type QiType.NORMAL\\n"
+            + "and QiVariable\\(X\\) has type NORMAL\\n"
             + "\\(because it has been defined by the user as this type\\)\\)\\)\\n"
-            + "but is also used as type QiType.TIME\\n"
+            + "but is also used as type TIME\\n"
             + r"\(because it is used as length in wait command\)",
         ):
             Wait(QiCells(1)[0], z)

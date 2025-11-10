@@ -25,6 +25,7 @@ from mocks import (
     rfdc,
     sequencer,
     servicehub_control,
+    storage,
     taskrunner,
     unit_cell,
 )
@@ -42,6 +43,7 @@ from qiclib.hardware.taskrunner import TaskRunner
     unit_cell,
     sequencer,
     servicehub_control,
+    storage,
     recording,
     pulse_gen,
     taskrunner,

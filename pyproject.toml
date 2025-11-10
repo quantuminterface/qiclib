@@ -39,13 +39,13 @@ dependencies = [
     "grpcio==1.73.1",
     "protobuf==6.31.1",
 ]
-requires-python = ">= 3.9"
+requires-python = ">= 3.10"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Operating System :: OS Independent",
     "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
 ]
 dynamic = ["version"]
 
@@ -56,7 +56,7 @@ Repository = "https://github.com/quantuminterface/qiclib"
 qiskit = ["qiskit>=1.2.1", "tzlocal>=5.2", "qiskit-aer>=0.15.1"]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 ignore_missing_imports = true
 no_implicit_optional = true
 # The following error codes are disabled because fixing them is

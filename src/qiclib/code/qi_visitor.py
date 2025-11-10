@@ -16,8 +16,9 @@
 from __future__ import annotations
 
 import abc
+from collections.abc import Callable
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Callable, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     from qiclib.code import QiCell
@@ -261,7 +262,7 @@ class QiResultCollector(QiCommandVisitor):
         if isinstance(cell_cmd, PlayReadoutCommand) and cell_cmd.recording is not None:
             cell_cmd = cell_cmd.recording
 
-        if isinstance(cell_cmd, RecordingCommand):
+        if isinstance(cell_cmd, RecordingCommand) and cell_cmd.save_to is not None:
             if self.if_else_depth > 0:
                 self.recording_in_if = True
 
@@ -363,6 +364,12 @@ class QiExpressionVisitor:
     def visit_cell_property(self, cell_prop):
         pass
 
+    def visit_condition(self, condition):
+        pass
+
+    def visit_indexed(self, indexed):
+        pass
+
 
 class QiJobVisitor(QiCommandVisitor, QiExpressionVisitor):
     """Visitor over every program construct in qicode.
@@ -442,6 +449,10 @@ class QiJobVisitor(QiCommandVisitor, QiExpressionVisitor):
 
     def visit_cell_property(self, cell_prop):
         pass
+
+    def visit_indexed(self, indexed):
+        indexed.base.accept(self)
+        indexed.index.accept(self)
 
 
 class StringFunctionPatcher:

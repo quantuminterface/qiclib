@@ -107,7 +107,7 @@ class _CFGNode:
         type: _CFGNode.Type | QiCommand,
         instruction_list,
         index,
-        *predecessors: tuple[_CFGNode, _CFGNode.SrcEdgeType],
+        predecessors: list[_CFGNode.Neighbor],
     ):
         if isinstance(type, QiCommand):
             self.type = _CFGNode.Type.COMMAND
@@ -132,6 +132,22 @@ class _CFGNode:
         self.id = next(_CFGNode._cfg_node_id)
 
         self.connect_predecessors(*predecessors)
+
+    def dest_type(self) -> _CFGNode.DestEdgeType:
+        assert self.type == _CFGNode.Type.COMMAND
+        if isinstance(self.command, ForRangeCommand):
+            return _CFGNode.DestEdgeType.FOR_ENTRY
+        else:
+            return _CFGNode.DestEdgeType.NORMAL
+
+    def __repr__(self) -> str:
+        if self.type == _CFGNode.Type.COMMAND:
+            return f"Command(command={self.command.__class__.__name__})"
+        elif self.type == _CFGNode.Type.END:
+            return "End"
+        else:
+            assert self.type == _CFGNode.Type.START
+            return "Start"
 
     def connect_successors(self, *successors: _CFGNode.Neighbor):
         assert all(isinstance(x, _CFGNode.Neighbor) for x in successors)
@@ -166,8 +182,8 @@ class _CFG:
 
         start, end = recursive_build_sub_cfg(job.commands, self.nodes)
 
-        self.end = _CFGNode(_CFGNode.Type.END, None, None, *end)
-        self.start = _CFGNode(_CFGNode.Type.START, None, None)
+        self.end = _CFGNode(_CFGNode.Type.END, None, None, end)
+        self.start = _CFGNode(_CFGNode.Type.START, None, None, [])
         self.start.connect_successors(
             _CFGNode.Neighbor(start, _CFGNode.SrcEdgeType.NORMAL)
         )
@@ -256,7 +272,7 @@ class _CFG:
 
 
 def recursive_build_sub_cfg(
-    commands: list[QiCommand], nodes
+    commands: list[QiCommand], nodes: set[_CFGNode]
 ) -> tuple[_CFGNode, list[_CFGNode.Neighbor]]:
     """
     Constructs the nodes and edges for a CFG containing provided commands.
@@ -269,19 +285,21 @@ def recursive_build_sub_cfg(
 
     for idx, command in enumerate(commands):
         if isinstance(command, IfCommand):
-            node = _CFGNode(command, commands, idx, *prev)
+            node = _CFGNode(command, commands, idx, prev)
             nodes.add(node)
 
             if len(command.body) > 0:
                 body_start, body_end = recursive_build_sub_cfg(command.body, nodes)
                 node.connect_successors(
-                    _CFGNode.Neighbor(body_start, _CFGNode.SrcEdgeType.IF_TRUE)
+                    _CFGNode.Neighbor(
+                        body_start, _CFGNode.SrcEdgeType.IF_TRUE, body_start.dest_type()
+                    )
                 )
                 prev = body_end
             else:
                 prev = [_CFGNode.Neighbor(node, _CFGNode.SrcEdgeType.IF_TRUE)]
 
-            if command.is_followed_by_else():  # len(command._else_body) > 0
+            if command.is_followed_by_else():
                 else_start, else_end = recursive_build_sub_cfg(
                     command._else_body, nodes
                 )
@@ -296,7 +314,7 @@ def recursive_build_sub_cfg(
             for p in prev:
                 p.dest_edge_type = _CFGNode.DestEdgeType.FOR_ENTRY
 
-            node = _CFGNode(command, commands, idx, *prev)
+            node = _CFGNode(command, commands, idx, prev)
             nodes.add(node)
 
             if len(command.body) > 0:
@@ -333,11 +351,11 @@ def recursive_build_sub_cfg(
             # Parallel Blocks have somewhat tricky semantics and don't fit neatly into a CFG schema.
             # Therefore we just treat them as a single command and the respective analyses can deal with them
             # as they see fit.
-            node = _CFGNode(command, commands, idx, *prev)
+            node = _CFGNode(command, commands, idx, prev)
             nodes.add(node)
             prev = [_CFGNode.Neighbor(node, _CFGNode.SrcEdgeType.NORMAL)]
         else:
-            node = _CFGNode(command, commands, idx, *prev)
+            node = _CFGNode(command, commands, idx, prev)
             nodes.add(node)
             prev = [_CFGNode.Neighbor(node, _CFGNode.SrcEdgeType.NORMAL)]
 
@@ -490,7 +508,7 @@ class FlatLatticeValue(DataflowValue):
         VALUE = 1
         NO_CONST = 2
 
-    def __init__(self, type, value: QiExpression):
+    def __init__(self, type, value: QiExpression | None):
         self.type = type
         self.value = value
 
@@ -631,7 +649,7 @@ class CellValues(DataflowValue):
         else:
             return self.values[idx]
 
-    def __setitem__(self, idx, val):
+    def __setitem__(self, idx: QiCell, val: DataflowValue):
         assert isinstance(val, DataflowValue)
         self.values[idx] = val
 

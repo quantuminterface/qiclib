@@ -22,8 +22,6 @@ Currently, this is only used to figure out the order of recording commands.
 # (In the future we might want to create a real simulator with support for more complex programs)
 from __future__ import annotations
 
-from typing import Any
-
 from qiclib.code.qi_command import (
     AssignCommand,
     DeclareCommand,
@@ -60,29 +58,36 @@ class Simulator:
     See :meth:`qiclib.code._simulate_recordings`
     """
 
+    class _Unassigned:
+        pass
+
+    Unassigned = _Unassigned()
+
     def __init__(self, cells: list[QiCell]):
         # Current state of loop variables
-        self.variables: dict[_QiVariableBase, Any] = {}
+        self.variables: dict[_QiVariableBase, int | Simulator._Unassigned] = {}
 
         # The order of recordings for a cell
         self.cell_recordings: dict[QiCell, list[RecordingCommand]] = {}
         for cell in cells:
             self.cell_recordings[cell] = []
 
-    class Unassigned:
-        pass
-
-    def _eval(self, expr: QiExpression) -> int:
-        if isinstance(expr, (_QiConstValue, QiCellProperty)):
+    def _eval(self, expr: QiExpression) -> int | _Unassigned:
+        if isinstance(expr, _QiConstValue | QiCellProperty):
             return expr.value
         elif isinstance(expr, _QiVariableBase):
             return self.variables[expr]
         elif isinstance(expr, _QiCalcBase):
-            if expr.op == QiOp.NOT:
-                return ~self._eval(expr.val1)
-
             v1 = self._eval(expr.val1)
+            if isinstance(v1, Simulator._Unassigned):
+                return Simulator.Unassigned
+
+            if expr.op == QiOp.NOT:
+                return ~v1
+
             v2 = self._eval(expr.val2)
+            if isinstance(v2, Simulator._Unassigned):
+                return Simulator.Unassigned
 
             if expr.op == QiOp.PLUS:
                 return to32bit(v1 + v2)
@@ -132,19 +137,19 @@ class Simulator:
 
                 if isinstance(cmd.start, _QiVariableBase):
                     start_value = self.variables[cmd.start]
-                elif isinstance(cmd.start, (_QiConstValue, QiCellProperty)):
+                elif isinstance(cmd.start, _QiConstValue | QiCellProperty):
                     start_value = cmd.start.value
                 else:
                     raise AssertionError("unreacheable")
 
                 if isinstance(cmd.end, _QiVariableBase):
                     end_value = self.variables[cmd.end]
-                elif isinstance(cmd.end, (_QiConstValue, QiCellProperty)):
+                elif isinstance(cmd.end, _QiConstValue | QiCellProperty):
                     end_value = cmd.end.value
                 else:
                     raise AssertionError("unreacheable")
 
-                assert isinstance(cmd.step, (_QiConstValue, QiCellProperty))
+                assert isinstance(cmd.step, _QiConstValue | QiCellProperty)
                 step_value = cmd.step.value
 
                 for i in range(start_value, end_value, step_value):

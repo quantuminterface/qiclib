@@ -26,11 +26,11 @@ def _get_for_range_end_value(start, end, step):
     ):
         return None
 
-    if isinstance(start, (_QiConstValue, QiCellProperty)):
+    if isinstance(start, _QiConstValue | QiCellProperty):
         start = start.value
-    if isinstance(end, (_QiConstValue, QiCellProperty)):
+    if isinstance(end, _QiConstValue | QiCellProperty):
         end = end.value
-    if isinstance(step, (_QiConstValue, QiCellProperty)):
+    if isinstance(step, _QiConstValue | QiCellProperty):
         step = step.value
 
     end_val = start
@@ -52,11 +52,11 @@ def _get_for_range_iterations(start, end, step):
     ):
         return None
 
-    if isinstance(start, (_QiConstValue, QiCellProperty)):
+    if isinstance(start, _QiConstValue | QiCellProperty):
         start = start.value
-    if isinstance(end, (_QiConstValue, QiCellProperty)):
+    if isinstance(end, _QiConstValue | QiCellProperty):
         end = end.value
-    if isinstance(step, (_QiConstValue, QiCellProperty)):
+    if isinstance(step, _QiConstValue | QiCellProperty):
         step = step.value
 
     iterations = 0

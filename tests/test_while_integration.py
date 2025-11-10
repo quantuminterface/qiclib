@@ -1,6 +1,7 @@
 """Test While loop integration with existing QiCode features."""
 
 from qiclib.code import *
+from qiclib.code.qi_command import IfCommand, WhileCommand
 
 
 def test_while_with_if_statements():
@@ -29,7 +30,7 @@ def test_while_with_if_statements():
 
     # Check that first command in body is an If command
     if_cmd = while_cmd.body[0]
-    assert hasattr(if_cmd, "__class__") and if_cmd.__class__.__name__ == "IfCommand"
+    assert isinstance(if_cmd, IfCommand)
 
 
 def test_while_with_for_range():
@@ -126,7 +127,7 @@ def test_while_with_variable_pulse_properties():
 
     while_cmd = None
     for cmd in job.commands:
-        if hasattr(cmd, "__class__") and cmd.__class__.__name__ == "WhileCommand":
+        if isinstance(cmd, WhileCommand):
             while_cmd = cmd
             break
 
@@ -169,7 +170,7 @@ def test_while_with_time_variables():
 
     while_cmd = None
     for cmd in job.commands:
-        if hasattr(cmd, "__class__") and cmd.__class__.__name__ == "WhileCommand":
+        if isinstance(cmd, WhileCommand):
             while_cmd = cmd
             break
 
@@ -192,7 +193,7 @@ def test_while_with_frequency_variables():
 
     while_cmd = None
     for cmd in job.commands:
-        if hasattr(cmd, "__class__") and cmd.__class__.__name__ == "WhileCommand":
+        if isinstance(cmd, WhileCommand):
             while_cmd = cmd
             break
 

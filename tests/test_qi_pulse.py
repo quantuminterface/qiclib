@@ -26,6 +26,7 @@ from qiclib.code.qi_jobs import (
     QiVariable,
 )
 from qiclib.code.qi_pulse import QiPulse, ShapeLib
+from qiclib.code.qi_var_definitions import _QiVariableBase
 from qiclib.packages.constants import CONTROLLER_SAMPLE_FREQUENCY_IN_HZ as samplerate
 
 
@@ -107,7 +108,7 @@ def test_get_pulse_length_variable(job):
 
     length = pulse.length
 
-    assert isinstance(length, QiVariable)
+    assert isinstance(length, _QiVariableBase)
     assert length.id, variable.id
 
 

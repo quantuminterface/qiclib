@@ -23,7 +23,8 @@ The basic typechecking idea is described in the documentation for `_TypeConstrai
 from __future__ import annotations
 
 import warnings
-from abc import abstractmethod
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -33,33 +34,67 @@ from .qi_visitor import QiJobVisitor
 
 if TYPE_CHECKING:
     from .qi_command import ForRangeCommand
-    from .qi_var_definitions import QiExpression, QiOp, QiOpCond
+    from .qi_var_definitions import (
+        QiExpression,
+        QiIndexed,
+        QiOp,
+        QiOpCond,
+        _QiConstValue,
+        _QiVariableBase,
+    )
 
 
-class QiType(Enum):
-    """The type that a :class:`~qiclib.code.qi_var_definitions.QiExpression` has."""
+class QiType(ABC):
+    """
+    The base class of all types.
+    """
 
-    UNKNOWN = 0
-    TIME = 1
-    """Time values contain some amount of times (in cycles) that, for example, can be used in wait commands.
+    UNKNOWN: QiType
+    TIME: QiType
+    """
+    Time values contain some amount of times (in cycles) that, for example, can be used in wait commands.
     They are specified using float (seconds) and are converted to cycles automatically.
     """
-    STATE = 2
-    """State values are the result of a recording."""
-    NORMAL = 3
-    """Freely usable integer values."""
-    FREQUENCY = 4
+    STATE: QiType
+    """
+    State values are the result of a recording.
+    """
+    NORMAL: QiType
+    """
+    Freely usable integer values.
+    """
+    FREQUENCY: QiType
     """
     Frequency values can be used in the Play/PlayReadout commands and, like TIME, are specified using floats.
     """
-    PHASE = 5
+    PHASE: QiType
     """
     Phase values are specified in radians and can be used in the Play/Readout commands
     """
-    AMPLITUDE = 6
+    AMPLITUDE: QiType
     """
     Amplitude values are specified in floating point units from 0 to 1 and can be used in the Play/PlayReadout commands
     """
+
+    @staticmethod
+    def ARRAY(
+        element_type: QiType, shape: None | tuple[int | None, ...] = None
+    ) -> QiArrayType:
+        """
+        Arrays are compound types and can contain a fixed number of elements
+        """
+        return QiArrayType(element_type, shape)
+
+    def is_array(self) -> bool:
+        return isinstance(self, QiArrayType)
+
+    @abstractmethod
+    def is_unknown(self) -> bool:
+        pass
+
+    @abstractmethod
+    def matches(self, other: QiType) -> bool:
+        pass
 
     @classmethod
     def convert_from(cls, py_type) -> QiType:
@@ -70,6 +105,86 @@ class QiType(Enum):
         if py_type is float:
             return QiType.TIME
         raise RuntimeError(f"passed type {py_type} cannot be converted to a QiType")
+
+
+@dataclass(frozen=True)
+class QiScalarType(QiType):
+    """
+    Scalar types contain a single value, i.e., frequency, time, normal, ...
+    The are in contrast to compound types, such as the QiArrayType.
+    """
+
+    name: str
+
+    def __str__(self):
+        return self.name
+
+    def is_unknown(self) -> bool:
+        return False
+
+    def matches(self, other: QiType) -> bool:
+        return other == self
+
+
+class QiUnknownType(QiType):
+    def __str__(self) -> str:
+        return "UNKNOWN"
+
+    def is_unknown(self) -> bool:
+        return True
+
+    def matches(self, other: QiType) -> bool:
+        return other == self
+
+
+@dataclass(frozen=True)
+class QiArrayType(QiType):
+    """
+    Array types are a collection of homogeneous elements.
+    """
+
+    element_type: QiType
+    shape: tuple[int | None, ...] | None
+
+    def __str__(self):
+        if self.shape:
+            shape_str = "x".join(str(s) if s is not None else "?" for s in self.shape)
+            return f"Array[{self.element_type}, {shape_str}]"
+        return f"Array[{self.element_type}, ?]"
+
+    def flat_size(self):
+        if self.shape is None:
+            raise RuntimeError("shape is not resolved; cannot obtain flat size")
+        if len(self.shape) == 0:
+            raise RuntimeError("Array must be at least 1D")
+        total_size = 1
+        for element in self.shape:
+            if element is None:
+                raise RuntimeError("shape is not resolved; cannot obtain flat size")
+            total_size *= element
+        return total_size
+
+    def is_unknown(self) -> bool:
+        return self.element_type.is_unknown()
+
+    def matches(self, other: QiType) -> bool:
+        if not isinstance(other, QiArrayType):
+            return False
+        if self.shape is not None and other.shape is not None:
+            if self.shape != other.shape:
+                return False
+
+        # One shape is not defined => match purely on type.
+        return other.element_type == self.element_type
+
+
+QiType.UNKNOWN = QiUnknownType()
+QiType.TIME = QiScalarType("TIME")
+QiType.STATE = QiScalarType("STATE")
+QiType.NORMAL = QiScalarType("NORMAL")
+QiType.FREQUENCY = QiScalarType("FREQUENCY")
+QiType.PHASE = QiScalarType("PHASE")
+QiType.AMPLITUDE = QiScalarType("AMPLITUDE")
 
 
 class _TypeConstraintReason:
@@ -90,6 +205,11 @@ class _TypeConstraintReasonQiCondition(_TypeConstraintReason):
 class _TypeConstraintReasonQiCommand(_TypeConstraintReason):
     def __init__(self, command):
         self.command = command
+
+
+class _TypeConstraintReasonQiIndexed(_TypeConstraintReason):
+    def __init__(self, result: QiIndexed):
+        self.result = result
 
 
 class _IllegalTypeReason(Enum):
@@ -126,6 +246,8 @@ class _TypeDefiningUse(_TypeFact, Enum):
     PULSE_FREQUENCY = 7
     PULSE_PHASE = 8
     PULSE_AMPLITUDE = 9
+    STATIC_VARIABLE = 10
+    INDEX = 11
 
     def to_error_message(self) -> str:
         return {
@@ -139,6 +261,8 @@ class _TypeDefiningUse(_TypeFact, Enum):
             _TypeDefiningUse.PULSE_FREQUENCY: "is used as pulse frequency.",
             _TypeDefiningUse.PULSE_PHASE: "is used as pulse phase.",
             _TypeDefiningUse.PULSE_AMPLITUDE: "is used as pulse amplitude.",
+            _TypeDefiningUse.STATIC_VARIABLE: "is used as static variable",
+            _TypeDefiningUse.INDEX: "is used as index of an array",
         }[self]
 
 
@@ -182,7 +306,7 @@ class _TypeConstraint(_TypeFact):
 
     def is_condition_satisified(self) -> bool:
         for var, type in self.condition:
-            if var.type != type:
+            if not var.type.matches(type):
                 return False
         return True
 
@@ -264,6 +388,13 @@ class _TypeConstraint(_TypeFact):
             else:
                 assert False, f"Unexpected command {self.reason.command}."
 
+        elif isinstance(self.reason, _TypeConstraintReasonQiIndexed):
+            assert len(self.condition) == 1
+            cond = self.condition[0]
+            return (
+                f"is used in an index with type {cond[1]}\n"
+                + f"(because {cond[0]} {cond[0]._type_info.type_reason.to_error_message()})"
+            )
         else:
             raise AssertionError(
                 f"reason ({self.reason}, type {type(self.reason)}) is not a type constraint reason"
@@ -282,7 +413,7 @@ class _TypeInformation:
     def add_constraint(self, constraint: _TypeConstraint):
         """Adds a type constraint to this expression.
         If this expression already has a type it will try to apply it immediately."""
-        if self.type == QiType.UNKNOWN:
+        if self.type.is_unknown():
             self.constraints.append(constraint)
         else:
             constraint.try_apply()
@@ -314,7 +445,21 @@ class _TypeInformation:
 
             for constraint in self.constraints:
                 constraint.try_apply()
-        elif self.type != type:
+        elif isinstance(self.type, QiArrayType):
+            if not isinstance(type, QiArrayType):
+                raise TypeError(
+                    f"{self.expression} was of type {self.type}\n"
+                    + f"(because it {self.type_reason.to_error_message()})\n"
+                    + f"but is also used as type {type}\n"
+                    + f"(because it {reason.to_error_message()})"
+                )
+            if self.type.element_type == QiType.UNKNOWN:
+                self.type = QiType.ARRAY(type.element_type, self.type.shape)
+                self.type_reason = reason
+
+                for constraint in self.constraints:
+                    constraint.try_apply()
+        elif not self.type.matches(type):
             raise TypeError(
                 f"{self.expression} was of type {self.type}\n"
                 + f"(because it {self.type_reason.to_error_message()})\n"
@@ -409,6 +554,34 @@ def add_qi_condition_constraints(op: QiOpCond, lhs: QiExpression, rhs: QiExpress
         _add_equal_constraints(QiType.STATE, reason, lhs, rhs)
 
 
+def add_qi_index_constraints(base: _QiVariableBase, result: QiIndexed):
+    reason = _TypeConstraintReasonQiIndexed(result)
+
+    for typ in (
+        QiType.FREQUENCY,
+        QiType.AMPLITUDE,
+        QiType.NORMAL,
+        QiType.PHASE,
+        QiType.TIME,
+    ):
+        # If the base is an array of some type then the result must be of the element type
+        _add_implies_constraint(
+            [
+                (base, QiType.ARRAY(element_type=typ)),
+            ],
+            (result, typ),
+            reason,
+        )
+        # vice-versa: if the result is of some type, the base must be an array with that element-type
+        _add_implies_constraint(
+            [
+                (result, typ),
+            ],
+            (base, QiType.ARRAY(element_type=typ)),
+            reason,
+        )
+
+
 def _add_equal_constraints(
     type: QiType, reason: _TypeConstraintReason, *expressions: QiExpression
 ):
@@ -449,13 +622,13 @@ class QiTypeFallbackVisitor(QiJobVisitor):
     """
 
     def visit_for_range(self, for_range_cm: ForRangeCommand):
-        if for_range_cm.var.type == QiType.UNKNOWN:
+        if for_range_cm.var.type.is_unknown():
             for_range_cm.var._type_info.set_type(QiType.NORMAL, _TypeFallback.INT)
 
         super().visit_for_range(for_range_cm)
 
     def visit_constant(self, const):
-        if const.type == QiType.UNKNOWN:
+        if const.type.is_unknown():
             if isinstance(const._given_value, float):
                 const._type_info.set_type(QiType.TIME, _TypeFallback.FLOAT)
             else:
@@ -516,19 +689,19 @@ class QiPostTypecheckVisitor(QiJobVisitor):
         assign_cmd.var.accept(self)
         super().visit_assign_command(assign_cmd)
 
-    def visit_constant(self, const):
-        if const.type == QiType.UNKNOWN:
+    def visit_constant(self, const: _QiConstValue):
+        if const.type.is_unknown():
             raise TypeError(f"Could not infer type of {const}.")
 
-    def visit_variable(self, var):
-        if var.type == QiType.UNKNOWN:
+    def visit_variable(self, var: _QiVariableBase):
+        if var.type.is_unknown():
             raise TypeError(f"Could not infer type of {var}.")
 
     def visit_calc(self, calc):
         super().visit_calc(calc)
-        if calc.type == QiType.UNKNOWN:
+        if calc.type.is_unknown():
             raise TypeError(f"Could not infer type of {calc}.")
 
     def visit_cell_property(self, cell_prop):
-        if cell_prop.type == QiType.UNKNOWN:
+        if cell_prop.type.is_unknown():
             raise TypeError(f"Could not infer type of {cell_prop}")

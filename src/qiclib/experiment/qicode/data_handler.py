@@ -17,8 +17,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any, Callable, Protocol
+from collections.abc import Callable, Iterator
+from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 

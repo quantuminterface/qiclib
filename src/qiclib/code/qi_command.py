@@ -33,7 +33,6 @@ from qiclib.code.qi_var_definitions import (
     QiCondition,
     QiExpression,
     QiVariableSet,
-    _QiCalcBase,
     _QiConstValue,
     _QiVariableBase,
 )
@@ -165,13 +164,13 @@ class WaitCommand(QiCellCommand):
     :param length: How long to wait for
     """
 
-    def __init__(self, cell, length: QiExpression | QiCellProperty):
+    def __init__(self, cell, length: int | float | QiExpression):
         super().__init__(cell)
         self._length = length
 
         if isinstance(length, _QiVariableBase):
             self.add_associated_variable(length)
-        elif isinstance(length, _QiCalcBase):
+        elif isinstance(length, QiExpression):
             for variable in length.contained_variables:
                 self.add_associated_variable(variable)
 
@@ -206,18 +205,18 @@ class AnyPlayCommand(QiCellCommand, QiTriggerCommand, ABC):
             self.add_associated_variable(variable)
 
         # length of command might differ from pulse length
-        self._length: float | _QiVariableBase | QiCellProperty = self.pulse.length
+        self._length: float | QiExpression = self.pulse.length
 
         self.trigger_index = 0
 
     @property
-    def length(self):
+    def length(self) -> float | QiExpression:
         return (
             self._length() if isinstance(self._length, QiCellProperty) else self._length
         )
 
     @length.setter
-    def length(self, value):
+    def length(self, value: float | QiExpression):
         self._length = value
 
 
@@ -696,21 +695,19 @@ class ParallelCommand(QiCommand):
         for command in entry:
             if not isinstance(
                 command,
-                (
-                    PlayCommand,
-                    RecordingCommand,
-                    RotateFrameCommand,
-                    PlayReadoutCommand,
-                    PlayFluxCommand,
-                    WaitCommand,
-                    DigitalTriggerCommand,
-                ),
+                PlayCommand
+                | RecordingCommand
+                | RotateFrameCommand
+                | PlayReadoutCommand
+                | PlayFluxCommand
+                | WaitCommand
+                | DigitalTriggerCommand,
             ):
                 raise RuntimeError(
                     f"Type {command.__class__.__name__} not allowed inside Parallel()"
                 )
             if (
-                isinstance(command, (RecordingCommand, PlayReadoutCommand))
+                isinstance(command, RecordingCommand | PlayReadoutCommand)
                 and command.uses_state
             ):
                 raise RuntimeError("Can not save to state variable inside Parallel")
@@ -889,7 +886,7 @@ class ParallelCommand(QiCommand):
 
                     length = reg.value
 
-                    if isinstance(cmd, (PlayCommand, PlayReadoutCommand)):
+                    if isinstance(cmd, PlayCommand | PlayReadoutCommand):
                         var_pulse = True
                 else:
                     length = util.conv_time_to_cycles(cmd.length, "ceil")

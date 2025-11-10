@@ -23,6 +23,8 @@ provides helper functions to generate code for expressions and more.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -38,6 +40,7 @@ from qiclib.code.qi_command import (
     QiTriggerCommand,
     RecordingCommand,
     SyncCommand,
+    WaitCommand,
 )
 from qiclib.code.qi_seq_instructions import (
     SeqAwaitQubitState,
@@ -55,16 +58,19 @@ from qiclib.code.qi_seq_instructions import (
     SeqWaitImm,
     SeqWaitRegister,
 )
+from qiclib.code.qi_types import QiArrayType, QiType
 from qiclib.code.qi_util import _get_for_range_iterations
 from qiclib.code.qi_var_definitions import (
     QiCellProperty,
     QiCondition,
     QiExpression,
+    QiIndexed,
     QiOp,
     QiOpCond,
     QiVariableSet,
     _QiCalcBase,
     _QiConstValue,
+    _QiStaticVariable,
     _QiVariableBase,
 )
 
@@ -74,7 +80,7 @@ class _Register:
     Keeps track of values in register. Values are used for program length. Program length is invalidated by use of If/Else.
     TODO load commands invalidate value"""
 
-    def __init__(self, address) -> None:
+    def __init__(self, address: int) -> None:
         self.adr = address
         self.value = None
         self.valid = True
@@ -151,6 +157,11 @@ class _Register:
             val2 = val2.value
 
         self.eval_operation[op](self, val1, val2)
+
+
+@dataclass
+class Pointer:
+    adr: int
 
 
 class ForRangeEntry:
@@ -246,16 +257,21 @@ class Sequencer:
     RECORDING_MODULE_DELAY_CYCLES = 1
     CHOKE_PULSE_INDEX = 14
 
+    # Storage module base address + BRAM's
+    MEMORY_ADDRESS = (0x20000 + 0x1000) // 4
+    MEMORY_ADDRESS_MAX = (0x20000 + 0x4FFC) // 4
+
     def __init__(self, cell_index: int | None = None):
         self.alu = _ALU(self)
         self.reset()
         self.cell_index = cell_index
 
     def reset(self) -> None:
+        self._static_region: list[int] = []
         self._register_stack: list[_Register] = []
         self.instruction_list: list[SequencerInstruction] = []
         self._prog_cycles = _ProgramCycles()
-        self._var_reg_dict: dict[Any, _Register] = {}
+        self._var_reg_dict: dict[Any, _Register | Pointer] = {}
         self._trigger_mods = _TriggerModules()
         self._for_range_list: list[ForRangeEntry] = []
         self._for_range_stack: list[ForRangeEntry] = []
@@ -265,9 +281,25 @@ class Sequencer:
         for x in range(Sequencer.AVAILABLE_REGISTERS, 0, -1):
             self._register_stack.append(_Register(x))
 
+    def executable(self) -> list[int]:
+        return [instr.get_riscv_instruction() for instr in self.instruction_list]
+
     def print_assembler(self):
         for pc, instruction in enumerate(self.instruction_list):
             print(f"{pc}# {instruction}")
+
+    def request_memory(self, content: list[int]) -> Pointer:
+        adr = Sequencer.MEMORY_ADDRESS + len(self._static_region)
+        if (adr + len(content)) > Sequencer.MEMORY_ADDRESS_MAX:
+            raise RuntimeError(
+                f"Memory error: Cannot store more than {(Sequencer.MEMORY_ADDRESS_MAX - Sequencer.MEMORY_ADDRESS)} data words"
+            )
+        self._static_region.extend(content)
+        return Pointer(adr)
+
+    @property
+    def static_region(self) -> list[int]:
+        return self._static_region
 
     @property
     def prog_cycles(self):
@@ -288,31 +320,96 @@ class Sequencer:
     def recording_delay(self):
         return util.conv_cycles_to_time(self.RECORDING_MODULE_DELAY_CYCLES)
 
-    def add_variable(self, var):
+    def get_array_initial_value(
+        self, values: Iterable[int | float], element_type: QiType
+    ) -> list[int]:
+        conversion_functions: dict[QiType, Callable] = {
+            QiType.NORMAL: int,
+            QiType.STATE: int,
+            QiType.TIME: util.conv_time_to_cycles,
+            QiType.PHASE: util.conv_phase_to_nco_phase,
+            QiType.AMPLITUDE: util.conv_amplitude_to_int,
+            QiType.FREQUENCY: util.conv_freq_to_nco_phase_inc,
+        }
+        conversion = conversion_functions.get(element_type)
+        if conversion is None:
+            raise NotImplementedError(f"{element_type} is not implemented in arrays")
+        return list(map(conversion, values))
+
+    def add_variable(self, var: _QiVariableBase):
         """Adds variable to sequencer, reserving a register for it"""
-        reg = self.request_register()
+        if isinstance(var, _QiStaticVariable):
+            if isinstance(var.value, int):
+                reg = self.request_memory([var.value or 0])
+            else:
+                raise NotImplementedError(
+                    "Static variables currently not supported for arrays"
+                )
+        elif isinstance(var.type, QiArrayType):
+            arr = var.type
+            assert arr.shape is not None, "Inferred array shapes are not supported yet"
+            assert len(arr.shape) == 1, "Multi-dimensional arrays are not supported yet"
+            array_size = arr.shape[0]
+            assert array_size is not None, "Inferred array shapes are not supported yet"
+            if var.value is None:
+                reg = self.request_memory([0] * array_size)
+            else:
+                initial_value = var.value
+                assert isinstance(initial_value, Iterable)
+                post_processed = self.get_array_initial_value(
+                    initial_value, arr.element_type
+                )
+                assert len(post_processed) == array_size, (
+                    f"Array size mismtach. Declared {array_size}, initial value: {len(post_processed)}"
+                )
+                reg = self.request_memory(post_processed)
+        else:
+            reg = self.request_register()
         self._var_reg_dict[var.id] = reg
         # Named variables can be initialized externally
-        if var.name is not None:
+        if var.name is not None and isinstance(reg, _Register):
             reg.valid = False
             reg.value = 0
 
     def release_variable(self, var):
-        self.release_register(self.get_var_register(var))
+        reg_or_pointer = self.get_var_register(var)
+        if isinstance(reg_or_pointer, _Register):
+            self.release_register(reg_or_pointer)
 
-    def get_var_register(self, var) -> _Register:
-        """Returns _Register of QiVariable var"""
+    def get_var_destination(self, var: _QiVariableBase) -> _Register | Pointer:
         reg = self._var_reg_dict.get(var.id)
 
         if reg is None:
+            id_str = f"id={var.id}"
+            if var.name is not None:
+                id_str += f"; name={var.name})"
             raise RuntimeError(
-                f"Variable not defined for Sequencer, var.id:{var.id}, {self._var_reg_dict}"
+                f"Variable not defined for Sequencer: {id_str}, {self._var_reg_dict}"
             )
 
         return reg
 
+    def get_var_register(self, var) -> _Register:
+        """Returns _Register of QiVariable var"""
+        destination = self.get_var_destination(var)
+        if isinstance(destination, _Register):
+            return destination
+
+        adr_reg = self.immediate_to_register(destination.adr)
+        target = self.request_register()
+        # This is not correct, but at this point in the compilation chain,
+        # we have no way to determine the value at some memory location.
+        target.value = 0
+        target.valid = True
+        self.add_load_cmd(target, adr_reg)
+        return target
+
     def get_var_value(self, var) -> int | float | None:
-        return self.get_var_register(var).get_value()
+        val = self.get_var_register(var)
+        if isinstance(val, _Register):
+            return val.get_value()
+        else:
+            return None
 
     def request_register(self) -> _Register:
         """Returns register from stack, raises exception, if no registers are on stack anymore"""
@@ -322,7 +419,7 @@ class Sequencer:
             print(f"Not enough registers available, sequencer {self} error {e}")
             raise
 
-    def get_cycles_from_length(self, length) -> _Register | int:
+    def get_cycles_from_length(self, length) -> _Register | Pointer | int:
         """If length is QiVariable, return _Register, else return numbers of cycles ceiled"""
         from .qi_var_definitions import _QiVariableBase
 
@@ -407,11 +504,34 @@ class Sequencer:
         dst_reg.update_register_value(val, QiOp.PLUS, 0)
         return dst_reg
 
+    def assign_value_to_register(self, value, dst_reg: _Register, if_depth: int):
+        if isinstance(value, _QiConstValue):
+            self.immediate_to_register(val=value.value, dst_reg=dst_reg)
+            dst_reg.valid = if_depth == 0
+            return
+        elif isinstance(value, _QiCalcBase):
+            register = self.add_qi_calc(value)
+        elif isinstance(value, _QiVariableBase):
+            register = self.get_var_register(value)
+        else:
+            raise TypeError(value)
+
+        self.add_mov_command(dst_reg=dst_reg, src_reg=register)
+
+        dst_reg.valid = register.valid and if_depth == 0
+
+        if isinstance(value, _QiCalcBase):
+            self.release_register(register)
+
+    def assign_value_to_memory(self, value: QiExpression, dst: Pointer):
+        address_pointer = self.immediate_to_register(dst.adr)
+        self.add_store_cmd(value, address_pointer)
+
     def add_calculation(
         self,
-        val1: _Register | int | float,
+        val1: _Register | int,
         operator: QiOp,
-        val2: _Register | int | float,
+        val2: _Register | int,
         dst_reg: _Register | None = None,
     ) -> _Register:
         """Adds calculation command to sequencer. Depending on the values and the operation different commands are added.
@@ -455,12 +575,31 @@ class Sequencer:
             return self.add_qi_calc(value)
         elif isinstance(value, _QiVariableBase):
             return self.get_var_register(value)
-        elif isinstance(value, (_QiConstValue, QiCellProperty)):
+        elif isinstance(value, _QiConstValue | QiCellProperty):
             return value.value
+        elif isinstance(value, QiIndexed):
+            base = self.get_var_destination(value.base)
+            assert isinstance(base, Pointer)
+            index = self.__evaluate_qicalc_val(value.index)
+            if isinstance(index, int):
+                result = self.immediate_to_register(base.adr + index)
+            else:
+                result = self.add_calculation(base.adr, QiOp.PLUS, index)
+            dst = self.request_register()
+            if isinstance(result.value, int):
+                dst.value = self.static_region[result.value // Sequencer.MEMORY_ADDRESS]
+            self.add_load_cmd(dst, result)
+            return dst
         else:
             raise TypeError("Unknown type in QiCalc")
 
-    def add_qi_calc(self, qi_calc) -> _Register:
+    def add_memory_move_to_register_command(self, source: Pointer) -> _Register:
+        reg = self.request_register()
+        cmd = SeqLoad(reg.adr, source.adr)
+        self.add_instruction_to_list(cmd, length_in_cycles=Sequencer.LOAD_STORE_LENGTH)
+        return reg
+
+    def add_qi_calc(self, qi_calc: _QiCalcBase) -> _Register:
         """QiCalc is traversed and for each node a calculation is added to the sequencer. After the calculation is added,
         _Registers are released, if leafs are also QiCalc nodes. If leafs are QiVariable they are not released
         """
@@ -490,6 +629,8 @@ class Sequencer:
         qicalc_val = self.__evaluate_qicalc_val(expr)
         if isinstance(qicalc_val, int):
             return self.immediate_to_register(qicalc_val)
+        if isinstance(qicalc_val, Pointer):
+            return self.add_memory_move_to_register_command(qicalc_val)
         else:
             return qicalc_val
 
@@ -538,7 +679,7 @@ class Sequencer:
             self.add_mov_command(dst, src)
             return
 
-        if isinstance(value, (_QiConstValue, QiCellProperty)):
+        if isinstance(value, _QiConstValue | QiCellProperty):
             value = value.value
 
         self.immediate_to_register(val=value, dst_reg=dst)
@@ -564,7 +705,7 @@ class Sequencer:
             )
             self.release_register(register)
 
-    def add_wait_cmd(self, qi_wait):
+    def add_wait_cmd(self, qi_wait: WaitCommand):
         """Evaluates QiWait
         If length attribute is int/float, calls _wait_cycles to add wait commands.
         If length attribute is _QiVariable, it's register is used for wait command.
@@ -572,8 +713,8 @@ class Sequencer:
         """
         from .qi_var_definitions import _QiCalcBase
 
-        if isinstance(qi_wait.length, _QiCalcBase):
-            length = self.add_qi_calc(qi_wait.length)
+        if isinstance(qi_wait.length, QiExpression):
+            length = self.__evaluate_qicalc_val(qi_wait.length)
             warnings.warn("Calculations inside wait might impede timing")
             # TODO decrease wait time depending on amount of calculations for length
         else:
@@ -591,7 +732,7 @@ class Sequencer:
 
             if isinstance(qi_wait.length, _QiCalcBase):
                 self.release_register(length)
-        else:
+        elif isinstance(length, int):
             try:
                 self._wait_cycles(length)
             except ValueError as e:
@@ -599,6 +740,10 @@ class Sequencer:
                 raise ValueError(
                     f"Wait length needs to be between 0 and {maxtime:.3f}s, but was {qi_wait.length}s."
                 ) from e
+        else:
+            raise AssertionError(
+                f"Unknown length type {length.__class__.__name__} given when adding wait command"
+            )
 
     def _get_length_of_trigger(self, *pulses, recording_delay) -> _Register | int:
         """Compares length of pulses and returns longest.
@@ -623,8 +768,12 @@ class Sequencer:
         wait = 0
         for pulse_cmd in pulses:
             if isinstance(pulse_cmd, AnyPlayCommand):
-                if isinstance(pulse_cmd.length, _QiVariableBase):
-                    return self.get_var_register(pulse_cmd.length)
+                if isinstance(pulse_cmd.length, QiExpression):
+                    val = self.__evaluate_qicalc_val(pulse_cmd.length)
+                    if isinstance(val, _Register):
+                        return val
+                    else:
+                        wait = max(wait, val)
                 else:
                     wait = max(wait, pulse_cmd.length)
             elif isinstance(pulse_cmd, RecordingCommand):
@@ -638,7 +787,11 @@ class Sequencer:
                 ):  # if wait is already variable, take variable as wait time
                     wait = max(wait, length)
 
-        return self.get_cycles_from_length(wait)
+        reg = self.get_cycles_from_length(wait)
+        assert isinstance(reg, _Register | int), (
+            "Static variables not yet supported for variable length"
+        )
+        return reg
 
     def add_nco_sync(self, delay: float):
         """Adds NCO Sync Trigger to sequencer"""
@@ -694,11 +847,11 @@ class Sequencer:
             readout, recording, manipulation, coupling0, coupling1, digital
         )
 
-        self.add_instruction_to_list(SeqTrigger(*trigger_values))
-
         length = self._get_length_of_trigger(
             manipulation, readout, recording, digital, recording_delay=recording_delay
         )
+
+        self.add_instruction_to_list(SeqTrigger(*trigger_values))
 
         if isinstance(length, _Register) or var_single_cycle:  # is any pulse variable?
             if var_single_cycle is False:
@@ -737,12 +890,12 @@ class Sequencer:
 
         if isinstance(start, _QiVariableBase):
             start = self.get_var_value(start)
-        elif isinstance(start, (_QiConstValue, QiCellProperty)):
+        elif isinstance(start, _QiConstValue | QiCellProperty):
             start = start.value
 
         if isinstance(stop, _QiVariableBase):
             stop = self.get_var_value(stop)
-        elif isinstance(stop, (_QiConstValue, QiCellProperty)):
+        elif isinstance(stop, _QiConstValue | QiCellProperty):
             stop = stop.value
 
         entry = ForRangeEntry(self.get_var_register(variable).adr, start, stop, step)
@@ -814,15 +967,11 @@ class Sequencer:
         """
 
         requested_registers = []
-
-        if isinstance(value, _QiCalcBase):
-            value_register = self.add_qi_calc(value)
-        elif isinstance(value, _QiVariableBase):
-            value_register = self.get_var_register(value)
-        elif isinstance(value, (_QiConstValue, QiCellProperty)):
-            value_register = self.request_register()
-            requested_registers.append(value_register)
-            self.immediate_to_register(value.value, value_register)
+        destination = self.__evaluate_qicalc_val(value)
+        if isinstance(destination, int):
+            value_register = self.immediate_to_register(destination)
+        else:
+            value_register = destination
 
         base_register, offset, free = self._normalise_base_offset(base, offset)
 
@@ -872,7 +1021,6 @@ class Sequencer:
             length_in_cycles=Sequencer.LOAD_STORE_LENGTH,
             length_valid=True,
         )
-        print(f"{self.add_instruction_to_list}")
 
         if free:
             self.release_register(base_register)
@@ -1185,8 +1333,8 @@ class _TriggerModules:
         readout: PlayReadoutCommand | None = None,
         rec: RecordingCommand | None = None,
         manipulation: PlayCommand | None = None,
-        coupling0: PlayCommand | None = None,
-        coupling1: PlayCommand | None = None,
+        coupling0: PlayFluxCommand | None = None,
+        coupling1: PlayFluxCommand | None = None,
         digital: DigitalTriggerCommand | None = None,
     ) -> list[int]:
         """Returns trigger values for defined pulses.
