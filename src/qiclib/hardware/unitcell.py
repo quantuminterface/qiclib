@@ -365,7 +365,7 @@ class UnitCells(PlatformComponent, Mapping):
 
     @ServiceHubCall
     def status(self, job_id: int):
-        return self._stub.GetJobStatus(dt.UInt(value=job_id))
+        return self._stub.GetJobStatus(dt.UInt(value=job_id)).status
 
     def _process_results(
         self,

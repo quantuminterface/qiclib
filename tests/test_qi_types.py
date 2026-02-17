@@ -13,12 +13,15 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+import re
+
 import pytest
 
-from qiclib.code.qi_jobs import (
+from qiclib.code import (
     Assign,
     ForRange,
     If,
+    Play,
     QiCells,
     QiIntVariable,
     QiJob,
@@ -29,52 +32,54 @@ from qiclib.code.qi_jobs import (
     Recording,
     Wait,
 )
-from qiclib.code.qi_var_definitions import QiNormalValue, QiTimeValue
+from qiclib.code.qi_command import (
+    AssignCommand,
+    IfCommand,
+    RecordingCommand,
+    WaitCommand,
+)
+from qiclib.code.qi_var_definitions import (
+    QiConst,
+    QiTimeValue,
+    _QiConstValue,
+    _QiVariableBase,
+)
 
 
 def test_wait_defining_use():
-    with QiJob():
+    with QiJob() as job:
         cells = QiCells(1)
         x = QiVariable()
-
-        assert x.type == QiType.UNKNOWN
 
         Wait(cells[0], x)
 
-    assert x.type == QiType.TIME
+    assert job.get_var(x).type == QiType.TIME
 
 
 def test_pulse_defining_use():
-    with QiJob():
-        _cells = QiCells(1)
+    with QiJob() as job:
+        q = QiCells(1)
         x = QiVariable()
 
-        assert x.type == QiType.UNKNOWN
+        Play(q[0], QiPulse(x))
 
-        _pulse = QiPulse(x)
-
-    assert x.type == QiType.TIME
+    assert job.get_var(x).type == QiType.TIME
 
 
 def test_state_defining_use():
-    with QiJob():
+    with QiJob() as job:
         cells = QiCells(1)
 
         x = QiVariable()
 
-        assert x.type == QiType.UNKNOWN
-
         Recording(cells[0], 20e-9, state_to=x)
 
-    assert x.type == QiType.STATE
+    assert job.get_var(x).type == QiType.STATE
 
 
 def test_shift_defining_use():
-    job = QiJob()
-    job.__enter__()
-
-    x = QiVariable()
-    y = QiVariable()
+    x = _QiVariableBase(QiType.UNKNOWN)
+    y = _QiVariableBase(QiType.UNKNOWN)
 
     assert x.type == QiType.UNKNOWN
     assert y.type == QiType.UNKNOWN
@@ -87,146 +92,132 @@ def test_shift_defining_use():
 
 
 def test_calc_propagation():
-    with QiJob():
+    with QiJob() as job:
         _cells = QiCells(1)
-
         x = QiVariable()
-
-        assert x.type == QiType.UNKNOWN
 
         y = 2 * x + 4e-9
 
         Assign(QiVariable(), y)
 
-    assert y.type == QiType.TIME
-    assert x.type == QiType.TIME
+    assert job.get_var(x).type == QiType.TIME
 
 
 def test_time_result_calc_propagation():
-    with QiJob():
+    with QiJob() as job:
         cells = QiCells(1)
 
         x = QiVariable()
         y = QiVariable()
 
-        z = x + y
+    x = job.get_var(x)
+    y = job.get_var(y)
+    z = x + y
 
-        assert x.type == QiType.UNKNOWN
-        assert y.type == QiType.UNKNOWN
-        assert z.type == QiType.UNKNOWN
+    assert x.type == QiType.UNKNOWN
+    assert y.type == QiType.UNKNOWN
+    assert z.type == QiType.UNKNOWN
 
-        Wait(cells[0], z)
+    WaitCommand(cells[0], z)
 
-        assert x.type == QiType.TIME
-        assert y.type == QiType.TIME
-        assert z.type == QiType.TIME
+    assert x.type == QiType.TIME
+    assert y.type == QiType.TIME
+    assert z.type == QiType.TIME
 
 
 def test_contradictory_types():
-    with QiJob():
+    with QiJob() as job:
         cells = QiCells(1)
         x = QiVariable()
 
         Wait(cells[0], x)
-        assert x.type == QiType.TIME
 
-        with pytest.raises(
-            TypeError,
-            match="QiVariable\\(\\) was of type TIME\\n"
-            + "\\(because it is used as length in wait command\\)\\n"
-            + "but is also used as type STATE\\n"
-            + r"\(because it is used as save_to of recording command\)",
-        ):
-            Recording(cells[0], 20e-9, state_to=x)
+    x = job.get_var(x)
+    assert x.type == QiType.TIME
+
+    with pytest.raises(
+        TypeError,
+        match="QiVariable\\(\\) was of type TIME\\n"
+        + "\\(because it is used as length in wait command\\)\\n"
+        + "but is also used as type STATE\\n"
+        + r"\(because it is used as save_to of recording command\)",
+    ):
+        RecordingCommand(cells[0], length=20e-9, save_to=None, state_to=x, offset=0)
 
 
 def test_assign_inference():
-    with QiJob():
-        x = QiVariable()
+    x = _QiVariableBase(QiType.UNKNOWN)
+    AssignCommand(x, _QiConstValue(40e-9, QiType.TIME))
 
-        assert x.type == QiType.UNKNOWN
-
-        Assign(x, QiTimeValue(40e-9))
-
-        assert x.type == QiType.TIME
+    assert x.type == QiType.TIME
 
 
 def test_normal_value():
-    with QiJob():
-        x = QiVariable()
-
-        assert x.type == QiType.UNKNOWN
-
-        Assign(x, QiNormalValue(20))
-
-        assert x.type == QiType.NORMAL
+    x = _QiVariableBase(QiType.UNKNOWN)
+    AssignCommand(x, _QiConstValue(20, QiType.NORMAL))
+    assert x.type == QiType.NORMAL
 
 
 def test_reverse_assign_inference():
-    with QiJob():
-        y = QiVariable()
-        x = QiVariable(type=QiType.TIME)
+    y = _QiVariableBase(QiType.UNKNOWN)
+    x = _QiVariableBase(QiType.TIME)
 
-        assert y.type == QiType.UNKNOWN
+    AssignCommand(x, y)
 
-        Assign(x, y)
-
-        assert y.type == QiType.TIME
+    assert y.type == QiType.TIME
 
 
 def test_operand_inference():
-    with QiJob():
+    with QiJob() as job:
         cells = QiCells(1)
 
-        x = QiVariable(type=QiType.TIME)
+        x = QiTimeVariable()
         y = QiVariable()
-
-        assert y.type == QiType.UNKNOWN
 
         Wait(cells[0], x * y)
 
-        assert y.type == QiType.NORMAL
+    assert job.get_var(y).type == QiType.NORMAL
 
 
 def test_indirect_inference():
-    with QiJob():
+    with QiJob() as job:
         cells = QiCells(1)
 
         x = QiVariable()
         y = QiVariable()
 
         with If(x < y):
-            assert x.type == QiType.UNKNOWN
-            assert y.type == QiType.UNKNOWN
-
             Wait(cells[0], x)
 
-            assert x.type == QiType.TIME
-            assert y.type == QiType.TIME
+    x = job.get_var(x)
+    y = job.get_var(y)
+
+    assert x.type == QiType.TIME
+    assert y.type == QiType.TIME
 
 
 def test_time_loop_inference():
-    with QiJob():
+    with QiJob() as job:
         x = QiVariable()
 
-        assert x.type == QiType.UNKNOWN
-
         with ForRange(x, 0, QiTimeVariable(), 4e-9):
-            assert x.type == QiType.TIME
+            pass
+
+    assert job.get_var(x).type == QiType.TIME
 
 
 def test_int_loop_inference():
-    with QiJob():
+    with QiJob() as job:
         x = QiVariable()
 
         with ForRange(x, 2, 100):
             pass
 
-    assert x.type == QiType.NORMAL
+    assert job.get_var(x).type == QiType.NORMAL
 
 
 def test_indirect_operand_inference():
-    with QiJob():
+    with QiJob() as job:
         cells = QiCells(1)
 
         x = QiVariable()
@@ -236,61 +227,50 @@ def test_indirect_operand_inference():
 
         # At this point, y and x can bei either TIME or NORMAL.
 
-        assert x.type == QiType.UNKNOWN
-        assert y.type == QiType.UNKNOWN
-
         Wait(cells[0], y)
 
-    assert x.type == QiType.TIME
-    assert y.type == QiType.TIME
+    assert job.get_var(x).type == QiType.TIME
+    assert job.get_var(y).type == QiType.TIME
 
 
 def test_condition_calc_propagation():
-    job = QiJob()
-    job.__enter__()
+    with pytest.raises(
+        TypeError, match=re.escape("Could not infer type of QiVariable().")
+    ):
+        with QiJob() as job:
+            cells = QiCells(1)
 
-    cells = QiCells(1)
+            x1 = QiVariable()
+            x2 = QiVariable()
+            y1 = QiVariable()
+            y2 = QiVariable()
 
-    x1 = QiVariable()
-    x2 = QiVariable()
-    y1 = QiVariable()
-    y2 = QiVariable()
+            x = x1 * x2
+            y = y1 * y2
 
-    x = x1 * x2
-    y = y1 * y2
+            with If(x == y):
+                Wait(cells[0], x1)
 
-    with If(x == y):
-        assert all(
-            variable.type == QiType.UNKNOWN for variable in (x1, x2, x, y1, y2, y)
-        )
-
-        Wait(cells[0], x1)
-
-        assert x1.type == QiType.TIME
-        assert x2.type == QiType.NORMAL
-        assert x.type == QiType.TIME
-        assert y1.type == QiType.UNKNOWN
-        assert y2.type == QiType.UNKNOWN
-        assert y.type == QiType.TIME
-
-    with pytest.raises(TypeError, match="Could not infer type of QiVariable()."):
-        job.__exit__(None, None, None)
+    assert job.get_var(x1).type == QiType.TIME
+    assert job.get_var(x2).type == QiType.NORMAL
+    assert job.get_var(y1).type == QiType.UNKNOWN
+    assert job.get_var(y2).type == QiType.UNKNOWN
 
 
 def test_illegal_type_error():
-    with QiJob():
-        cells = QiCells(1)
+    with pytest.raises(
+        TypeError,
+        match="QiVariable\\(X\\) can not have STATE\\n"
+        + "\\(because ForRanges can only iterate over TIME or NORMAL values\\)\\n"
+        + "but the type is required.\\n"
+        + r"\(because it is used as save_to of recording command\)",
+    ):
+        with QiJob():
+            cells = QiCells(1)
 
-        x = QiVariable(name="X")
+            x = QiVariable(name="X")
 
-        with ForRange(x, 1, 10, 1):
-            with pytest.raises(
-                TypeError,
-                match="QiVariable\\(X\\) can not have STATE\\n"
-                + "\\(because ForRanges can only iterate over TIME or NORMAL values\\)\\n"
-                + "but the type is required.\\n"
-                + r"\(because it is used as save_to of recording command\)",
-            ):
+            with ForRange(x, 1, 10, 1):
                 Recording(cells[0], 100e-9, state_to=x)
 
 
@@ -311,69 +291,70 @@ def test_multiplication_unknown_type_error():
 
 
 def test_large_equality_chain_error():
-    with QiJob():
-        cells = QiCells(1)
+    with pytest.raises(
+        TypeError,
+        match="QiVariable\\(Z\\) was of type TIME\\n"
+        + "\\(because it is used as length in wait command\\)\\n"
+        + "but is also used as type NORMAL\\n"
+        + "\\(because it is used in QiOp.MULT calculation of type TIME\\n"
+        + "\\(because QiVariable\\(W\\) has type TIME\\n"
+        + "\\(because it is compared with QiVariable\\(X\\) with type TIME\\n"
+        + "\\(because QiVariable\\(X\\) is compared with QiVariable\\(Y\\) with type TIME\\n"
+        + "\\(because QiVariable\\(Y\\) is compared with QiVariable\\(Z\\) with type TIME\\n"
+        + r"\(because QiVariable\(Z\) is used as length in wait command\)\)\)\)\)\)",
+    ):
+        with QiJob():
+            cells = QiCells(1)
 
-        w = QiVariable(name="W")
-        x = QiVariable(name="X")
-        y = QiVariable(name="Y")
-        z = QiVariable(name="Z")
+            w = QiVariable(name="W")
+            x = QiVariable(name="X")
+            y = QiVariable(name="Y")
+            z = QiVariable(name="Z")
 
-        with If(x == w):
-            pass
+            with If(x == w):
+                pass
 
-        with If(y == x):
-            pass
+            with If(y == x):
+                pass
 
-        with If(y == z):
-            pass
+            with If(y == z):
+                pass
 
-        Wait(cells[0], w * z)
+            Wait(cells[0], w * z)
 
-        with pytest.raises(
-            TypeError,
-            match="QiVariable\\(Z\\) was of type TIME\\n"
-            + "\\(because it is used as length in wait command\\)\\n"
-            + "but is also used as type NORMAL\\n"
-            + "\\(because it is used in QiOp.MULT calculation of type TIME\\n"
-            + "\\(because QiVariable\\(W\\) has type TIME\\n"
-            + "\\(because it is compared with QiVariable\\(X\\) with type TIME\\n"
-            + "\\(because QiVariable\\(X\\) is compared with QiVariable\\(Y\\) with type TIME\\n"
-            + "\\(because QiVariable\\(Y\\) is compared with QiVariable\\(Z\\) with type TIME\\n"
-            + r"\(because QiVariable\(Z\) is used as length in wait command\)\)\)\)\)\)",
-        ):
             Wait(cells[0], z)
 
 
 def test_expression_error():
-    from qiclib.code.qi_var_definitions import QiTimeValue
+    with pytest.raises(
+        TypeError,
+        match=re.escape("""QiVariable(I) was of type NORMAL
+(because it has been defined by the user as this type)
+but is also used as type TIME
+(because it is used in ForRange over type TIME
+(because 1 is used in ForRange over type TIME
+(because QiVariable(Y) is used in QiOp.PLUS calculation of type TIME
+(because (QiVariable(Z) + QiVariable(Y)) is used in QiOp.PLUS calculation of type TIME
+(because QiVariable(Z) is used in Assign command with type TIME
+(because QiVariable(b) is used in Assign command with type TIME
+(because (QiVariable(a) * 4) is used in QiOp.MULT calculation of type TIME
+(because 4 has type TIME
+(because it has been defined by the user as this type)))))))))"""),
+    ):
+        with QiJob():
+            x = QiVariable(name="X")
+            y = QiVariable(name="Y")
+            z = QiVariable(name="Z")
 
-    with QiJob():
-        x = QiVariable(name="X")
-        y = QiVariable(name="Y")
-        z = QiVariable(name="Z")
+            a = QiVariable(name="a")
+            Assign(a, x + 23)
+            b = QiVariable(name="b")
+            Assign(b, a * QiTimeValue(4.0))
 
-        a = x + 23
-        b = a * QiTimeValue(4.0)
+            Assign(QiVariable(name="c"), z + y)
 
-        _c = z + y
+            Assign(z, b)
 
-        Assign(z, b)
-
-        with pytest.raises(
-            TypeError,
-            match="QiVariable\\(I\\) was of type NORMAL\\n"
-            + "\\(because it has been defined by the user as this type\\)\\n"
-            + "but is also used as type TIME\\n"
-            + "\\(because it is used in ForRange over type TIME\\n"
-            + "\\(because 1 is used in ForRange over type TIME\\n"
-            + "\\(because QiVariable\\(Y\\) is used in QiOp.PLUS calculation of type TIME\\n"
-            + "\\(because \\(QiVariable\\(Z\\) \\+ QiVariable\\(Y\\)\\) is used in QiOp.PLUS calculation of type TIME\\n"
-            + "\\(because QiVariable\\(Z\\) is used in Assign command with type TIME\\n"
-            + "\\(because \\(\\(QiVariable\\(X\\) \\+ 23\\) \\* 4\\) is used in QiOp.MULT calculation of type TIME\\n"
-            + "\\(because 4 has type TIME\\n"
-            + r"\(because it has been defined by the user as this type\)\)\)\)\)\)\)\)",
-        ):
             with ForRange(QiIntVariable(name="I"), 0, y, 1):
                 pass
 
@@ -392,52 +373,52 @@ def test_simple_error():
 
 
 def test_integer_multiplication():
-    with QiJob():
-        x = QiIntVariable(name="X")
-        y = QiIntVariable(name="Y")
+    with pytest.raises(
+        TypeError,
+        match="\\(QiVariable\\(X\\) \\* QiVariable\\(Y\\)\\) was of type NORMAL\\n"
+        + "\\(because it is used in QiOp.MULT calculation of type NORMAL\\n"
+        + "\\(because QiVariable\\(Y\\) has type NORMAL\\n"
+        + "\\(because it has been defined by the user as this type\\)\\n"
+        + "and QiVariable\\(X\\) has type NORMAL\\n"
+        + "\\(because it has been defined by the user as this type\\)\\)\\)\\n"
+        + "but is also used as type TIME\\n"
+        + r"\(because it is used as length in wait command\)",
+    ):
+        with QiJob():
+            x = QiIntVariable(name="X")
+            y = QiIntVariable(name="Y")
 
-        z = x * y
+            z = x * y
 
-        with pytest.raises(
-            TypeError,
-            match="\\(QiVariable\\(X\\) \\* QiVariable\\(Y\\)\\) was of type NORMAL\\n"
-            + "\\(because it is used in QiOp.MULT calculation of type NORMAL\\n"
-            + "\\(because QiVariable\\(Y\\) has type NORMAL\\n"
-            + "\\(because it has been defined by the user as this type\\)\\n"
-            + "and QiVariable\\(X\\) has type NORMAL\\n"
-            + "\\(because it has been defined by the user as this type\\)\\)\\)\\n"
-            + "but is also used as type TIME\\n"
-            + r"\(because it is used as length in wait command\)",
-        ):
             Wait(QiCells(1)[0], z)
 
 
 def test_constant_state_value():
-    from qiclib.code.qi_var_definitions import _QiConstValue
-
-    with QiJob():
+    with QiJob() as job:
         cells = QiCells(1)
         x = QiVariable()
 
-        constant_one = _QiConstValue(1)
+        constant_one = QiConst(1)
         Recording(cells[0], 20e-9, state_to=x)
 
         with If(x != constant_one):
             pass
 
-        assert constant_one.type == QiType.STATE
+    if_cmd = next(filter(lambda cmd: isinstance(cmd, IfCommand), job.commands))
+    assert isinstance(if_cmd, IfCommand)
+    c_one = if_cmd.condition.val2
+    assert isinstance(c_one, _QiConstValue)
+    assert c_one.type == QiType.STATE
 
 
 def test_constant_state_value_error():
-    from qiclib.code.qi_var_definitions import _QiConstValue
+    with pytest.raises(TypeError):
+        with QiJob():
+            cells = QiCells(1)
+            x = QiVariable()
 
-    with QiJob():
-        cells = QiCells(1)
-        x = QiVariable()
+            constant_one = QiConst(2)
+            Recording(cells[0], 20e-9, state_to=x)
 
-        constant_one = _QiConstValue(2)
-        Recording(cells[0], 20e-9, state_to=x)
-
-        with pytest.raises(TypeError):
             with If(x != constant_one):
                 pass

@@ -58,7 +58,7 @@ from qiclib.code.qi_seq_instructions import (
     SeqWaitImm,
     SeqWaitRegister,
 )
-from qiclib.code.qi_types import QiArrayType, QiType
+from qiclib.code.qi_types import QiType
 from qiclib.code.qi_util import _get_for_range_iterations
 from qiclib.code.qi_var_definitions import (
     QiCellProperty,
@@ -345,11 +345,8 @@ class Sequencer:
                 raise NotImplementedError(
                     "Static variables currently not supported for arrays"
                 )
-        elif isinstance(var.type, QiArrayType):
-            arr = var.type
-            assert arr.shape is not None, "Inferred array shapes are not supported yet"
-            assert len(arr.shape) == 1, "Multi-dimensional arrays are not supported yet"
-            array_size = arr.shape[0]
+        elif (arr := var.type.as_array()) is not None:
+            array_size = arr.len
             assert array_size is not None, "Inferred array shapes are not supported yet"
             if var.value is None:
                 reg = self.request_memory([0] * array_size)

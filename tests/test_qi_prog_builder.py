@@ -17,6 +17,7 @@ import pytest
 
 import qiclib.code.qi_visitor as qv
 import qiclib.packages.utility as util
+from qiclib.code import QiSample, ShapeLib
 from qiclib.code.qi_command import ForRangeCommand, IfCommand, WaitCommand
 from qiclib.code.qi_jobs import (
     ASM,
@@ -55,7 +56,8 @@ from qiclib.code.qi_seq_instructions import (
     SeqWaitRegister,
 )
 from qiclib.code.qi_sequencer import Sequencer, _TriggerModules
-from qiclib.code.qi_var_definitions import QiExpression
+from qiclib.code.qi_types import QiType
+from qiclib.code.qi_var_definitions import _QiVariableBase
 
 
 class TestUnrollLoop:
@@ -168,6 +170,8 @@ class TestUnrollLoop:
                 Play(q[1], QiPulse(length=24e-9))
 
         var_start_test._build_program()
+        var1 = var_start_test.get_var(var1)
+        var2 = var_start_test.get_var(var2)
 
         sequencer = var_start_test.cell_seq_dict[var_start_test.cells[0]]
 
@@ -768,8 +772,8 @@ def test_nested_start_var():
 
     cmd = sequencer.instruction_list[2]
     assert isinstance(cmd, SeqRegImmediateInst)
-    assert cmd.dst_reg == sequencer.get_var_register(i).adr
-    assert cmd.register == sequencer.get_var_register(count).adr
+    assert cmd.dst_reg == sequencer.get_var_register(test_fr.get_var(i)).adr
+    assert cmd.register == sequencer.get_var_register(test_fr.get_var(count)).adr
     assert cmd.immediate == 0
 
 
@@ -819,42 +823,45 @@ class TestQiWaitZeroLength:
 
 
 def test_for_range_TimingVariable():
-    with QiJob():
-        cell = QiCell(0)
+    with QiJob() as job:
+        cell = QiCells(1)
 
         var1 = QiTimeVariable()
 
-        with ForRange(var1, 0, 40e-9, 4e-9) as for_range:
-            Play(cell, QiPulse(length=var1))
+        with ForRange(var1, 0, 40e-9, 4e-9):
+            Play(cell[0], QiPulse(length=var1))
 
             with If(var1 == 0):
-                Play(cell, QiPulse(length=var1))
+                Play(cell[0], QiPulse(length=var1))
 
                 # readout and recording are not excluded
-                PlayReadout(cell, QiPulse(length=50e-9))
-                Recording(cell, "rec")
+                PlayReadout(cell[0], QiPulse(length=50e-9))
+                Recording(cell[0], save_to="rec")
 
                 with Parallel():
-                    PlayReadout(cell, QiPulse(length=52e-9))
+                    PlayReadout(cell[0], QiPulse(length=52e-9))
                 with Parallel():
-                    Play(cell, QiPulse(length=52e-9))
+                    Play(cell[0], QiPulse(length=52e-9))
 
-                Wait(cell, var1)
+                Wait(cell[0], var1)
             with Else():
-                Play(cell, QiPulse(length=50e-9))
+                Play(cell[0], QiPulse(length=50e-9))
 
                 # readout and recording should be excluded
-                PlayReadout(cell, QiPulse(length=var1))
-                Recording(cell, "rec")
+                PlayReadout(cell[0], QiPulse(length=var1))
+                Recording(cell[0], save_to="rec")
 
-                Wait(cell, var1)
+                Wait(cell[0], var1)
 
     cell_to_cm = qv.QiCMContainedCellVisitor()
+
+    for_range = next(filter(lambda cmd: isinstance(cmd, ForRangeCommand), job.commands))
+    assert isinstance(for_range, ForRangeCommand)
 
     for cmd in for_range.body:
         cmd.accept(cell_to_cm)
 
-    exclude_var = QiCmdExcludeVar([var1])
+    exclude_var = QiCmdExcludeVar([job.get_var(var1)])
 
     for cmd in for_range.body:
         cmd.accept(exclude_var)
@@ -864,7 +871,7 @@ def test_for_range_TimingVariable():
     test_if = exclude_var.commands[0]
 
     assert isinstance(test_if, IfCommand)
-    assert cell in test_if._relevant_cells
+    assert job.cells[0] in test_if._relevant_cells
 
     assert len(test_if.body) == 2  # should only contain readout command and Parallel
 
@@ -900,13 +907,13 @@ class TestBuildContextManager:
         sequencer = Sequencer()
         prog_builder = ProgramBuilderVisitor({job.cells[0]: sequencer}, [0])
 
-        var1 = QiVariable(int)
+        var1 = _QiVariableBase(QiType.NORMAL)
         sequencer.add_variable(var1)
         for_cmd = ForRangeCommand(
             var1,
-            QiExpression._from(1),
-            QiExpression._from(20),
-            QiExpression._from(5),
+            1,
+            20,
+            5,
             [],
         )
         for_cmd.body.append(WaitCommand(job.cells[0], 5e-9))
@@ -950,7 +957,7 @@ class TestBuildContextManager:
         sequencer = Sequencer()
         prog_builder = ProgramBuilderVisitor({job.cells[0]: sequencer}, [0])
 
-        var1 = QiVariable(int)
+        var1 = _QiVariableBase(QiType.NORMAL)
         sequencer.add_variable(var1)
         if_cmd = IfCommand(var1 == 3, body=[])
         if_cmd.body.append(WaitCommand(job.cells[0], 5e-9))
@@ -977,7 +984,7 @@ class TestBuildContextManager:
         sequencer = Sequencer()
         prog_builder = ProgramBuilderVisitor({job.cells[0]: sequencer}, [0])
 
-        var1 = QiVariable(int)
+        var1 = _QiVariableBase(QiType.NORMAL)
         sequencer.add_variable(var1)
         if_cmd = IfCommand(var1 == 3, body=[])
         if_cmd.body.append(WaitCommand(job.cells[0], 5e-9))
@@ -1033,6 +1040,7 @@ class TestQiAssignToSeq:
 
         test_assign._build_program()
 
+        x = test_assign.get_var(x)
         sequencer = test_assign.cell_seq_dict[test_assign.cells[0]]
         reg_x = sequencer.get_var_register(x)
 
@@ -1077,6 +1085,7 @@ class TestQiAssignToSeq:
 
         test_assign._build_program()
 
+        x = test_assign.get_var(x)
         sequencer = test_assign.cell_seq_dict[test_assign.cells[0]]
 
         reg_x = sequencer.get_var_register(x)
@@ -1094,6 +1103,7 @@ class TestQiAssignToSeq:
 
         test_assign._build_program()
 
+        x = test_assign.get_var(x)
         sequencer = test_assign.cell_seq_dict[test_assign.cells[0]]
 
         reg_x = sequencer.get_var_register(x)
@@ -1111,6 +1121,7 @@ class TestQiAssignToSeq:
 
         test_assign._build_program()
 
+        x = test_assign.get_var(x)
         sequencer = test_assign.cell_seq_dict[test_assign.cells[0]]
 
         reg_x = sequencer.get_var_register(x)
@@ -1129,6 +1140,7 @@ class TestQiAssignToSeq:
 
         test_assign._build_program()
 
+        x = test_assign.get_var(x)
         sequencer = test_assign.cell_seq_dict[test_assign.cells[0]]
 
         reg_x = sequencer.get_var_register(x)
@@ -1763,9 +1775,10 @@ class TestQiParallelToSeq:
     def test_parallel_job3(self):
         recording_length = 200e-9
 
+        sample = QiSample(1)
+        sample[0]["recording_length"] = recording_length
         with QiJob(skip_nco_sync=True) as job3:
             q = QiCells(1)
-            q[0]["recording_length"] = recording_length
             with Parallel():
                 Wait(q[0], 4e-9)
                 Play(q[0], QiPulse(24e-9))
@@ -1773,7 +1786,7 @@ class TestQiParallelToSeq:
                 PlayReadout(q[0], QiPulse(48e-9))
                 Recording(q[0], q[0]["recording_length"])
         # ignore first wait, trigger readout, then manipulation, then wait until recording is finished
-        job3._build_program()
+        job3._build_program(sample)
         sequencer = job3.cell_seq_dict[job3.cells[0]]
 
         assert (
@@ -2169,7 +2182,7 @@ class TestForRangeEntry:
         assert entry.start == 1  # 0 and 1 unrolled
         assert entry.end == 2
         assert entry.step == 1
-        assert entry.reg_addr == sequencer.get_var_register(var1).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var1)).adr
         assert entry.iterations == 1
         assert entry.aggregate_iterations == 1
 
@@ -2182,7 +2195,7 @@ class TestForRangeEntry:
         assert entry.start == 2  # 0 and 1 unrolled
         assert entry.end == 6
         assert entry.step == 1
-        assert entry.reg_addr == sequencer.get_var_register(var1).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var1)).adr
         assert entry.iterations == 4
         assert entry.aggregate_iterations == 4
 
@@ -2194,7 +2207,7 @@ class TestForRangeEntry:
         assert entry.start == 5
         assert entry.end == 0
         assert entry.step == -1
-        assert entry.reg_addr == sequencer.get_var_register(var2).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var2)).adr
         assert entry.iterations == 5
         assert entry.aggregate_iterations == 5
 
@@ -2222,7 +2235,7 @@ class TestForRangeEntry:
         assert entry.start == 0
         assert entry.end == 1
         assert entry.step == 1
-        assert entry.reg_addr == sequencer.get_var_register(var1).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var1)).adr
         assert entry.iterations == 1
         assert entry.aggregate_iterations == 5
 
@@ -2236,7 +2249,7 @@ class TestForRangeEntry:
         assert entry.start == 5
         assert entry.end == 0
         assert entry.step == -1
-        assert entry.reg_addr == sequencer.get_var_register(var2).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var2)).adr
         assert entry.iterations == 5
         assert entry.aggregate_iterations == 5
 
@@ -2249,7 +2262,7 @@ class TestForRangeEntry:
         assert entry.start == 1
         assert entry.end == 2
         assert entry.step == 1
-        assert entry.reg_addr == sequencer.get_var_register(var1).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var1)).adr
         assert entry.iterations == 1
         assert entry.aggregate_iterations == 5
 
@@ -2263,7 +2276,7 @@ class TestForRangeEntry:
         assert entry.start == 5
         assert entry.end == 0
         assert entry.step == -1
-        assert entry.reg_addr == sequencer.get_var_register(var2).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var2)).adr
         assert entry.iterations == 5
         assert entry.aggregate_iterations == 5
 
@@ -2275,7 +2288,7 @@ class TestForRangeEntry:
         assert entry.start == 2
         assert entry.end == 6
         assert entry.step == 1
-        assert entry.reg_addr == sequencer.get_var_register(var1).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var1)).adr
         assert entry.iterations == 4
         assert entry.aggregate_iterations == 20  # 4*5 for nested loop
 
@@ -2287,7 +2300,7 @@ class TestForRangeEntry:
         assert entry.start == 5
         assert entry.end == 0
         assert entry.step == -1
-        assert entry.reg_addr == sequencer.get_var_register(var2).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var2)).adr
         assert entry.iterations == 5
         assert entry.aggregate_iterations == 5
 
@@ -2317,7 +2330,7 @@ class TestForRangeEntry:
         assert entry.start == 5
         assert entry.end == 0
         assert entry.step == -1
-        assert entry.reg_addr == sequencer.get_var_register(var2).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var2)).adr
         assert entry.iterations == 5
         assert entry.aggregate_iterations == 25
 
@@ -2328,7 +2341,7 @@ class TestForRangeEntry:
         assert entry.start == 1
         assert entry.end == 2
         assert entry.step == 1
-        assert entry.reg_addr == sequencer.get_var_register(var1).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var1)).adr
         assert entry.iterations == 1
         assert entry.aggregate_iterations == 1
 
@@ -2339,7 +2352,7 @@ class TestForRangeEntry:
         assert entry.start == 2
         assert entry.end == 6
         assert entry.step == 1
-        assert entry.reg_addr == sequencer.get_var_register(var1).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var1)).adr
         assert entry.iterations == 4
         assert entry.aggregate_iterations == 4
 
@@ -2370,7 +2383,7 @@ class TestForRangeEntry:
         assert entry.start == 5
         assert entry.end == 0
         assert entry.step == -1
-        assert entry.reg_addr == sequencer.get_var_register(var2).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var2)).adr
         assert entry.iterations == 5
         assert entry.aggregate_iterations == 25
 
@@ -2381,7 +2394,7 @@ class TestForRangeEntry:
         assert entry.start == 1
         assert entry.end == 2
         assert entry.step == 1
-        assert entry.reg_addr == sequencer.get_var_register(var1).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var1)).adr
         assert entry.iterations == 1
         assert entry.aggregate_iterations == 1
 
@@ -2392,7 +2405,7 @@ class TestForRangeEntry:
         assert entry.start == 2
         assert entry.end == 6
         assert entry.step == 1
-        assert entry.reg_addr == sequencer.get_var_register(var1).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var1)).adr
         assert entry.iterations == 4
         assert entry.aggregate_iterations == 4
 
@@ -2423,7 +2436,7 @@ class TestForRangeEntry:
         assert entry.start == 5
         assert entry.end == 0
         assert entry.step == -1
-        assert entry.reg_addr == sequencer.get_var_register(var2).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var2)).adr
         assert entry.iterations == 5
         assert entry.aggregate_iterations == 25
 
@@ -2434,7 +2447,7 @@ class TestForRangeEntry:
         assert entry.start == 1
         assert entry.end == 2
         assert entry.step == 1
-        assert entry.reg_addr == sequencer.get_var_register(var1).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var1)).adr
         assert entry.iterations == 1
         assert entry.aggregate_iterations == 1
 
@@ -2445,7 +2458,7 @@ class TestForRangeEntry:
         assert entry.start == 2
         assert entry.end == 6
         assert entry.step == 1
-        assert entry.reg_addr == sequencer.get_var_register(var1).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var1)).adr
         assert entry.iterations == 4
         assert entry.aggregate_iterations == 4
 
@@ -2470,7 +2483,7 @@ class TestForRangeEntry:
         assert entry.start == 0
         assert entry.end == 1
         assert entry.step == 1
-        assert entry.reg_addr == sequencer.get_var_register(var2).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var2)).adr
         assert entry.iterations == 1
         assert entry.aggregate_iterations == 1
 
@@ -2480,7 +2493,7 @@ class TestForRangeEntry:
         assert entry.start == 1
         assert entry.end == 2
         assert entry.step == 1
-        assert entry.reg_addr == sequencer.get_var_register(var2).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var2)).adr
         assert entry.iterations == 1
         assert entry.aggregate_iterations == 1
 
@@ -2490,27 +2503,28 @@ class TestForRangeEntry:
         assert entry.start == 2
         assert entry.end == 6
         assert entry.step == 1
-        assert entry.reg_addr == sequencer.get_var_register(var2).adr
+        assert entry.reg_addr == sequencer.get_var_register(test_fr.get_var(var2)).adr
         assert entry.iterations == 4
         assert entry.aggregate_iterations == 24
 
 
 def test_get_for_range_val_invalid():
+    # with QiJob():
+    # If variables have different values at relevant cells, return None
     with QiJob():
-        # If variables have different values at relevant cells, return None
         cell0 = QiCell(0)
         cell1 = QiCell(1)
-        seq0 = Sequencer()
-        seq1 = Sequencer()
-        var = QiVariable(int)
+    seq0 = Sequencer()
+    seq1 = Sequencer()
+    var = _QiVariableBase(QiType.NORMAL)
 
-        seq0.add_variable(var)
-        seq0.set_variable_value(var, 1)
-        seq1.add_variable(var)
-        seq1.set_variable_value(var, 2)
-        pb = ProgramBuilderVisitor({cell0: seq0, cell1: seq1}, [0, 1])
+    seq0.add_variable(var)
+    seq0.set_variable_value(var, 1)
+    seq1.add_variable(var)
+    seq1.set_variable_value(var, 2)
+    pb = ProgramBuilderVisitor({cell0: seq0, cell1: seq1}, [0, 1])
 
-        assert pb.get_var_value_on_seq(var, [cell0, cell1]) is None
+    assert pb.get_var_value_on_seq(var, [cell0, cell1]) is None
 
 
 def test_variable_extraction():
@@ -2528,6 +2542,9 @@ def test_variable_extraction():
             Wait(cells[0], delay)
     job._build_program()
 
+    delay = job.get_var(delay)
+    x = job.get_var(x)
+    y = job.get_var(y)
     assert delay in job._var_reg_map
     assert x in job._var_reg_map
     assert y not in job._var_reg_map
@@ -2548,7 +2565,7 @@ class TestInlineASM:
 
         with QiJob() as job:
             cells = QiCells(1)
-            ASM(cells[0], wait_instr)
+            ASM(cells[0], "wti 0xA")
 
         job._build_program()
 
@@ -2563,9 +2580,9 @@ class TestInlineASM:
 
         with QiJob() as job:
             cells = QiCells(1)
-            ASM(cells[0], wait_instr)
-            ASM(cells[0], store_instr)
-            ASM(cells[0], load_instr)
+            ASM(cells[0], "wti 0xA")
+            ASM(cells[0], "sw r3, 0(r4)")
+            ASM(cells[0], "lw r5, 0(r4)")
 
         job._build_program()
 
@@ -2580,13 +2597,13 @@ class TestInlineASM:
         with QiJob() as job:
             cells = QiCells(3)
 
-            ASM(cells[0], instr)
-            ASM(cells[2], instr)
+            ASM(cells[0], "wti 0x7B")
+            ASM(cells[2], "wti 0x7B")
 
-            job._build_program()
+        job._build_program()
 
-            assert job.cell_seq_dict[cells[0]].instruction_list[1] == instr
-            assert job.cell_seq_dict[cells[2]].instruction_list[1] == instr
+        assert job.cell_seq_dict[cells[0]].instruction_list[1] == instr
+        assert job.cell_seq_dict[cells[2]].instruction_list[1] == instr
 
 
 class TestRecordingOffset:
@@ -2639,3 +2656,17 @@ class TestRecordingOffset:
         assert isinstance(instructions[4], SeqStore)
         assert instructions[4].src_reg == instructions[1].dst_reg
         assert isinstance(instructions[5], SeqTrigger)
+
+
+def test_for_range_with_cell_property_allows_non_rect_shape():
+    """Test that QiCellProperty can be used as time in ForRange"""
+    with QiJob(skip_nco_sync=True) as job:
+        q = QiCells(1)
+
+        var = QiVariable(int)
+        with ForRange(var, 0, 5):
+            Play(q[0], QiPulse(length=q[0]["pulse_length"], shape=ShapeLib.gauss))
+
+    sample = QiSample(1)
+    sample[0]["pulse_length"] = 200e-9
+    job._build_program(sample)

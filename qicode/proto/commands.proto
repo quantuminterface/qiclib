@@ -1,0 +1,142 @@
+edition = "2023";
+
+package qicode.proto;
+
+import "qicode/proto/expression.proto";
+import "qicode/proto/variables.proto";
+import "qicode/proto/pulse.proto";
+import "qicode/proto/types.proto";
+import "qicode/proto/cell.proto";
+
+message DigitalTriggerCommand {
+    Cell cell = 1;
+    Expression length = 2;
+    repeated uint32 outputs = 3;
+}
+
+message WaitCommand {
+    Cell cell = 1;
+    Expression length = 2;
+}
+
+message RecordingCommand {
+    Cell cell = 1;
+    Expression offset = 2;
+    string save_to = 3;
+    Variable state_to = 4;
+    Expression duration = 5;
+    enum Mode {
+        Normal = 0;
+        ContinuousOn = 1;
+        ContinuousOff = 2;
+    }
+    Mode mode = 6;
+}
+
+message PlayCommand {
+    Cell cell = 1;
+    Pulse pulse = 2;
+}
+
+message PlayFluxCommand {
+    Coupler coupler = 1;
+    Pulse pulse = 2;
+}
+
+message PlayReadoutCommand {
+    Cell cell = 1;
+    Pulse pulse = 2;
+}
+
+message RotateFrameCommand {
+    Cell cell = 1;
+    Expression angle = 2;
+}
+
+message SyncCommand {
+    repeated Cell cells = 1;
+}
+
+message StoreCommand {
+    Cell cell = 1;
+    Variable var = 2;
+    string saveTo = 3;
+}
+
+message AssignCommand {
+    Variable destination = 1;
+    Expression value = 2;
+}
+
+message DeclareCommand {
+    Variable var = 1;
+    string name = 2;
+    Type type = 3;
+    bool static = 4;
+    Expression initialValue = 5;
+}
+
+message AsmCommand {
+    Cell cell = 1;
+    string instruction = 2;
+}
+
+message IfCommand {
+    Expression condition = 1;
+    repeated Command body = 2;
+}
+
+message ElseCommand {
+    repeated Command body = 1;
+}
+
+message ForRangeCommand {
+    Variable var = 1;
+    Expression start = 2;
+    Expression end = 3;
+    Expression step = 4;
+    repeated Command body = 5;
+}
+
+message WhileCommand {
+    Expression condition = 1;
+    repeated Command body = 2;
+}
+
+message ParallelCommand {
+    repeated Command body = 1;
+}
+
+message CallSite {
+    string file = 1;
+    uint32 line = 2;
+    string code = 3;
+}
+
+message GateCommand {
+    repeated Command body = 1;
+}
+
+message Command {
+    CallSite sourceInfo = 1;
+    oneof kind {
+        DigitalTriggerCommand digitalTriggerCommand = 2;
+        WaitCommand waitCommand = 3;
+        RecordingCommand recordingCommand = 4;
+        PlayCommand playCommand = 5;
+        PlayFluxCommand playFluxCommand = 6;
+        PlayReadoutCommand playReadoutCommand = 7;
+        RotateFrameCommand rotateFrameCommand = 8;
+        SyncCommand syncCommand = 9;
+        StoreCommand storeCommand = 10;
+        AssignCommand assignCommand = 11;
+        DeclareCommand declareCommand = 12;
+        AsmCommand asmCommand = 13;
+        IfCommand ifCommand = 14;
+        ElseCommand elseCommand = 15;
+        ForRangeCommand forRangeCommand = 16;
+        WhileCommand whileCommand = 17;
+        ParallelCommand parallelCommand = 18;
+        GateCommand gateCommand = 19;
+    }
+}

@@ -17,7 +17,15 @@ from unittest import mock
 
 import mocks
 import pytest
-from mocks import *
+from mocks import (
+    pimc,
+    pulse_gen,
+    recording,
+    rfdc,
+    servicehub_control,
+    taskrunner,
+    unit_cell,
+)
 from mocks.sequencer import MockSequencer
 
 import qiclib.packages.grpc.sequencer_pb2 as sequencer_protos
@@ -33,14 +41,12 @@ from qiclib.code.qi_jobs import (
     DigitalTriggerCommand,
     ForRange,
     QiCells,
-    QiIntVariable,
     QiJob,
-    QiStateVariable,
     QiTimeVariable,
     QiVariable,
     Wait,
 )
-from qiclib.code.qi_pulse import QiPulse
+from qiclib.code.qi_pulse import _QiPulse
 from qiclib.code.qi_seq_instructions import (
     SeqAwaitQubitState,
     SeqEnd,
@@ -64,7 +70,8 @@ from qiclib.code.qi_sequencer import (
     _RecordingTrigger,
     _TriggerModules,
 )
-from qiclib.code.qi_var_definitions import QiExpression, QiOp
+from qiclib.code.qi_types import QiType
+from qiclib.code.qi_var_definitions import QiExpression, QiOp, _QiVariableBase
 from qiclib.packages.constants import CONTROLLER_CYCLE_TIME
 
 
@@ -203,7 +210,7 @@ class TestCellCommandToSeq:
 
     @pytest.fixture
     def test_variable(self, test_sequencer):
-        var = QiTimeVariable()
+        var = _QiVariableBase(QiType.TIME)
         test_sequencer.add_variable(var)
         # initialise var1
         reg = test_sequencer.get_var_register(var)
@@ -212,13 +219,13 @@ class TestCellCommandToSeq:
 
     @pytest.fixture
     def test_state_variable(self, test_sequencer):
-        var = QiStateVariable()
+        var = _QiVariableBase(QiType.STATE)
         test_sequencer.add_variable(var)
         return var
 
     @pytest.fixture
     def test_uninitialized_variable(self, test_sequencer):
-        var = QiTimeVariable()
+        var = _QiVariableBase(QiType.TIME)
         test_sequencer.add_variable(var)
         # not initialised
         return var
@@ -262,7 +269,7 @@ class TestCellCommandToSeq:
         assert isinstance(test_sequencer.instruction_list[1], SeqWaitRegister)
 
     def test_play_command_no_wait(self, test_cell, test_sequencer):
-        play_cmd = PlayCommand(test_cell, QiPulse(length=CONTROLLER_CYCLE_TIME))
+        play_cmd = PlayCommand(test_cell, _QiPulse(length=CONTROLLER_CYCLE_TIME))
 
         test_sequencer.add_trigger_cmd(play_cmd)
 
@@ -270,7 +277,7 @@ class TestCellCommandToSeq:
         assert len(test_sequencer.instruction_list) == 1
 
     def test_play_command_wait(self, test_cell, test_sequencer):
-        play_cmd = PlayCommand(test_cell, QiPulse(length=CONTROLLER_CYCLE_TIME * 2))
+        play_cmd = PlayCommand(test_cell, _QiPulse(length=CONTROLLER_CYCLE_TIME * 2))
 
         test_sequencer.add_trigger_cmd(play_cmd)
 
@@ -287,9 +294,9 @@ class TestCellCommandToSeq:
         assert isinstance(test_sequencer.instruction_list[0], SeqTrigger)
 
     def test_play_commands_longest_wait(self, test_cell, test_sequencer):
-        play_cmd = PlayCommand(test_cell, QiPulse(length=CONTROLLER_CYCLE_TIME * 2))
+        play_cmd = PlayCommand(test_cell, _QiPulse(length=CONTROLLER_CYCLE_TIME * 2))
         readout_cmd = PlayReadoutCommand(
-            test_cell, QiPulse(length=CONTROLLER_CYCLE_TIME * 3)
+            test_cell, _QiPulse(length=CONTROLLER_CYCLE_TIME * 3)
         )
 
         test_sequencer.add_trigger_cmd(play_cmd, readout_cmd)
@@ -307,7 +314,7 @@ class TestCellCommandToSeq:
     ):
         # Pulse with variable length and no other pulse as follow up added to the sequencer.
         # end_of_command_body is called and should add a choke pulse to the sequencer
-        play_cmd = PlayCommand(test_cell, QiPulse(length=test_variable))
+        play_cmd = PlayCommand(test_cell, _QiPulse(length=test_variable))
 
         test_sequencer.add_trigger_cmd(play_cmd)
 
@@ -329,7 +336,7 @@ class TestCellCommandToSeq:
     ):
         # Pulse with variable length and no other pulse as follow up added to the sequencer.
         # Another command is added, but a choke pulse should be added to the sequencer beforehand
-        play_cmd = PlayCommand(test_cell, QiPulse(length=test_variable))
+        play_cmd = PlayCommand(test_cell, _QiPulse(length=test_variable))
 
         test_sequencer.add_trigger_cmd(manipulation=play_cmd)
 
@@ -363,9 +370,9 @@ class TestCellCommandToSeq:
     ):
         # Pulse with variable length and another pulse as follow up added to the sequencer.
         # Second Pulse should deactivate first pulse
-        play_cmd1 = PlayCommand(test_cell, QiPulse(length=test_variable))
+        play_cmd1 = PlayCommand(test_cell, _QiPulse(length=test_variable))
         play_cmd2 = PlayReadoutCommand(
-            test_cell, QiPulse(length=CONTROLLER_CYCLE_TIME)
+            test_cell, _QiPulse(length=CONTROLLER_CYCLE_TIME)
         )  # pulse with no wait time
 
         test_sequencer.add_trigger_cmd(manipulation=play_cmd1)
@@ -430,7 +437,7 @@ class TestCellCommandToSeq:
         rec_cmd = RecordingCommand(
             test_cell, None, None, CONTROLLER_CYCLE_TIME + 20e-9, 0
         )
-        play_cmd = PlayCommand(test_cell, QiPulse(length=0))
+        play_cmd = PlayCommand(test_cell, _QiPulse(length=0))
 
         test_sequencer.add_trigger_cmd(manipulation=play_cmd, recording=rec_cmd)
 
@@ -444,7 +451,7 @@ class TestCellCommandToSeq:
         rec_cmd = RecordingCommand(
             test_cell, None, test_state_variable, CONTROLLER_CYCLE_TIME + 20e-9, 0
         )
-        play_cmd = PlayCommand(test_cell, QiPulse(length=0))
+        play_cmd = PlayCommand(test_cell, _QiPulse(length=0))
 
         test_sequencer.add_trigger_cmd(manipulation=play_cmd, recording=rec_cmd)
 
@@ -458,7 +465,7 @@ class TestCellCommandToSeq:
         rec_cmd = RecordingCommand(
             test_cell, None, test_state_variable, CONTROLLER_CYCLE_TIME + 20e-9, 0
         )
-        play_cmd = PlayCommand(test_cell, QiPulse(length=test_variable))
+        play_cmd = PlayCommand(test_cell, _QiPulse(length=test_variable))
 
         test_sequencer.add_trigger_cmd(manipulation=play_cmd, recording=rec_cmd)
 
@@ -514,7 +521,7 @@ class TestCellCommandToSeq:
     ):
         with pytest.raises(RuntimeError):
             play_cmd = PlayCommand(
-                test_cell, QiPulse(length=test_uninitialized_variable)
+                test_cell, _QiPulse(length=test_uninitialized_variable)
             )
             test_sequencer.add_trigger_cmd(play_cmd)
 
@@ -541,8 +548,8 @@ class TestQiCalcToSeq:
 
     @pytest.fixture
     def qi_variables(self, test_sequencer):
-        x = QiVariable(int)
-        y = QiVariable(int)
+        x = _QiVariableBase(QiType.NORMAL)
+        y = _QiVariableBase(QiType.NORMAL)
         test_sequencer.add_variable(x)
         reg_x = test_sequencer.get_var_register(x)
         reg_x.value = 0
@@ -553,8 +560,8 @@ class TestQiCalcToSeq:
 
     @pytest.fixture
     def qi_time_variables(self, test_sequencer):
-        x = QiTimeVariable()
-        y = QiIntVariable()
+        x = _QiVariableBase(QiType.TIME)
+        y = _QiVariableBase(QiType.NORMAL)
         test_sequencer.add_variable(x)
         reg_x = test_sequencer.get_var_register(x)
         reg_x.value = 0
@@ -620,7 +627,7 @@ class TestQiCalcToSeq:
         assert dst_reg not in test_sequencer._register_stack
 
     def test_qi_calc_multiply(self, test_sequencer):
-        x = QiVariable(int)
+        x = _QiVariableBase(QiType.NORMAL)
         test_sequencer.add_variable(x)
         reg = test_sequencer.get_var_register(x)
         reg.value = 0
@@ -657,8 +664,8 @@ class TestQiCalcToSeq:
         assert dst_reg not in test_sequencer._register_stack
 
     def test_qi_calc_length_variables_Error(self, test_sequencer):
-        x = QiTimeVariable()
-        y = QiVariable(float)
+        x = _QiVariableBase(QiType.TIME)
+        y = _QiVariableBase(QiType.TIME)
         test_sequencer.add_variable(x)
         reg = test_sequencer.get_var_register(x)
         reg.value = 0
@@ -670,8 +677,8 @@ class TestQiCalcToSeq:
             _qi_calc_test = x << y + 20e-9
 
     def test_qi_calc_var_not_initialised(self, test_sequencer):
-        x = QiVariable(int)
-        y = QiVariable(int)
+        x = _QiVariableBase(QiType.TIME)
+        y = _QiVariableBase(QiType.NORMAL)
         test_sequencer.add_variable(x)
         test_sequencer.add_variable(y)
 
@@ -681,8 +688,8 @@ class TestQiCalcToSeq:
             _dst_reg = test_sequencer.add_qi_calc(qi_calc_test)
 
     def test_qi_calc_invalid_registers(self, test_sequencer):
-        x = QiVariable(int)
-        y = QiVariable(int)
+        x = _QiVariableBase(QiType.NORMAL)
+        y = _QiVariableBase(QiType.NORMAL)
         test_sequencer.add_variable(x)
         reg_x = test_sequencer.get_var_register(x)
         reg_x.value = 0
@@ -768,11 +775,9 @@ class TestMemToSeqCommand:
         assert instructions[0].dst_reg == instructions[1].src_reg
 
     def test_store_calc(self, test_sequencer, base):
-        with QiJob():
-            var = QiVariable(int, value=0, name="foo")
-            test_sequencer.add_variable(var)
-            calc = var & 0xFFFF0000
-
+        var = _QiVariableBase(QiType.NORMAL, 0, "foo")
+        calc = var & 0xFFFF0000
+        test_sequencer.add_variable(var)
         test_sequencer.add_store_cmd(calc, base, offset=123)
 
         instructions = test_sequencer.instruction_list

@@ -1,0 +1,57 @@
+edition = "2023";
+
+package qicode.proto;
+
+/// A pulse described in a way that it can be sampled.
+message SampleablePulse {
+    /// The amplitude of the pulse.
+    /// Defined from `int16::min` to `int16::max`,
+    /// and other value is an error.
+    int32 amplitude = 1;
+    /// The index of the pulse.
+    /// The controller defines bounds of the index.
+    /// Furthermore, specialized pulses (e.g., choke)
+    /// may only occupy certain indices. This depends
+    /// on the controller.
+    uint32 index = 2;
+    /// The length of the pulse expressed in sample granularity.
+    uint32 length = 3;
+    /// The shape of the pulse.
+    /// This is an ID that is communicated between the compiler
+    /// and the controller software. Users define pulses by an ID
+    /// and must respect this ID when sampling the pulse.
+    int64 shape = 4;
+    /// Whether to hold the last value of the pulse.
+    /// If true, the last value of the pulse is held until a new
+    /// trigger command overwrites this.
+    bool hold = 5;
+    /// The phase offset that this pulse has.
+    /// This is defined using processor specific values
+    int64 phase = 6;
+    /// Special property to adapt the global phase
+    bool shift_phase= 7;
+}
+
+message BinaryJob {
+    message Cell {
+        uint32 id = 1;
+        repeated uint32 code = 2;
+        repeated uint32 original_recording_ids = 3;
+        repeated SampleablePulse manipulation_pulses = 4;
+        repeated SampleablePulse readout_pulses = 5;
+    }
+
+    repeated Cell cells = 1;
+}
+
+message AssembledJob {
+    message Cell {
+        uint32 id = 1;
+        repeated string code = 2;
+        repeated uint32 original_recording_ids = 3;
+        repeated SampleablePulse manipulation_pulses = 4;
+        repeated SampleablePulse readout_pulses = 5;
+    }
+
+    repeated Cell cells = 1;
+}

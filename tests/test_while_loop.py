@@ -144,9 +144,7 @@ def test_while_loop_with_recordings():
 def test_while_loop_error_conditions():
     """Test error handling in while loop creation."""
     # Invalid condition type should raise error
-    with pytest.raises(
-        RuntimeError, match="While loop condition must be a QiCondition"
-    ):
+    with pytest.raises(ValueError, match="Expression must be a binary condition"):
         with QiJob():
             q = QiCells(1)
             counter = QiIntVariable(0)

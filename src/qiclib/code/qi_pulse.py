@@ -17,12 +17,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 
 import qiclib.packages.constants as const
 import qiclib.packages.utility as util
+import qicode
 from qiclib.code.qi_types import QiType, _TypeDefiningUse
 from qiclib.code.qi_var_definitions import (
     QiExpression,
@@ -37,15 +38,24 @@ class Shape(np.vectorize):
     defined on the standardized interval [0,1).
     """
 
-    def __init__(self, name: str, func: Callable[..., Any], *args: Any, **kwargs: Any):
+    REGISTRY: ClassVar[dict[int, Shape]] = {}
+
+    def __init__(
+        self, name: str, ident: int, func: Callable[..., Any], *args: Any, **kwargs: Any
+    ):
         self.name = name
+        self._id = ident
         super().__init__(func, *args, **kwargs)
+        Shape.REGISTRY[ident] = self
 
     def __mul__(self, other):
-        return Shape(self.name, lambda x: self.pyfunc(x) * other.pyfunc(x))
+        return Shape(self.name, self._id, lambda x: self.pyfunc(x) * other.pyfunc(x))
 
     def __str__(self) -> str:
         return f"Shape({self.name})"
+
+    def id(self) -> int:
+        return self._id
 
 
 class ShapeLibClass:
@@ -55,29 +65,39 @@ class ShapeLibClass:
     """
 
     def __init__(self) -> None:
-        self.zero = Shape("", lambda x: 0)
-        self.rect = Shape("rect", lambda x: np.where(0 <= x < 1, 1, 0))
+        self.zero = Shape("", 0, lambda x: 0)
+        self.rect = Shape("rect", 1, lambda x: np.where(0 <= x < 1, 1, 0))
         self.gauss = (
-            Shape("gauss", lambda x: np.exp(-0.5 * np.power((x - 0.5) / 0.166, 2.0)))
+            Shape(
+                "gauss",
+                0x8000,
+                lambda x: np.exp(-0.5 * np.power((x - 0.5) / 0.166, 2.0)),
+            )
             * self.rect
         )
-        self.ramp = Shape("ramp", lambda x: x) * self.rect
-        self.sqrfct = Shape("sqrfct", lambda x: x**2) * self.rect
+        self.ramp = Shape("ramp", 0x8001, lambda x: x) * self.rect
+        self.sqrfct = Shape("sqrfct", 0x8002, lambda x: x**2) * self.rect
 
         self.l_sphere: Shape = (
-            Shape("l_sphere", lambda x: np.sqrt(1 - x**2)) * self.rect
+            Shape("l_sphere", 0x8003, lambda x: np.sqrt(1 - x**2)) * self.rect
         )
         self.r_sphere: Shape = (
-            Shape("r_sphere", lambda x: np.sqrt(1 - (x - 1) ** 2)) * self.rect
+            Shape("r_sphere", 0x8004, lambda x: np.sqrt(1 - (x - 1) ** 2)) * self.rect
         )
         self.gauss_up: Shape = (
             Shape(
-                "gauss_up", lambda x: np.exp(-0.5 * np.power((x - 1) / 2 / 0.166, 2.0))
+                "gauss_up",
+                0x8005,
+                lambda x: np.exp(-0.5 * np.power((x - 1) / 2 / 0.166, 2.0)),
             )
             * self.rect
         )
         self.gauss_down: Shape = (
-            Shape("gauss_down", lambda x: np.exp(-0.5 * np.power(x / 2 / 0.166, 2.0)))
+            Shape(
+                "gauss_down",
+                0x8006,
+                lambda x: np.exp(-0.5 * np.power(x / 2 / 0.166, 2.0)),
+            )
             * self.rect
         )
 
@@ -85,8 +105,10 @@ class ShapeLibClass:
 # Make ShapeLib a singleton:
 ShapeLib = ShapeLibClass()
 
+QiPulse = qicode.QiPulse
 
-class QiPulse:
+
+class _QiPulse:
     """
     Class to describe a single pulse.
 
@@ -163,7 +185,7 @@ class QiPulse:
         if isinstance(length, QiExpression):
             length._type_info.set_type(QiType.TIME, _TypeDefiningUse.PULSE_LENGTH)
             self.associated_variables.update(length.contained_variables)
-            if self.shape != ShapeLib.rect:
+            if length.is_dynamic() and self.shape != ShapeLib.rect:
                 raise NotImplementedError(
                     "Variable pulse lengths are only supported for rectangular pulses"
                 )
@@ -178,7 +200,7 @@ class QiPulse:
         amplitude: float | _QiVariableBase | QiExpression = 1.0,
         phase: float | _QiVariableBase = 0.0,
         frequency: float | QiExpression | None = None,
-    ) -> QiPulse:
+    ) -> _QiPulse:
         """
         Generates a continuous wave pulse.
         :param amplitude: Amplitude of the pulse.
@@ -189,29 +211,29 @@ class QiPulse:
         return cls("cw", ShapeLib.rect, amplitude, phase, frequency)
 
     @classmethod
-    def off(cls) -> QiPulse:
+    def off(cls) -> _QiPulse:
         """
         Turns a continuous wave pulse off.
         It is only sensible to use this pulse after using `QiPulse.cw()`.
         """
         return cls("off")
 
-    def _are_variable_length(self, other: QiPulse) -> bool:
+    def _are_variable_length(self, other: _QiPulse) -> bool:
         return self.is_variable_length and other.is_variable_length
 
-    def _are_same_length(self, other: QiPulse) -> bool:
+    def _are_same_length(self, other: _QiPulse) -> bool:
         if isinstance(self._length, QiExpression):
             return self._length._equal_syntax(other._length)
         return self._length == other._length
 
-    def _are_same_amplitude(self, other: QiPulse) -> bool:
+    def _are_same_amplitude(self, other: _QiPulse) -> bool:
         if isinstance(self.amplitude, QiExpression):
             return self.amplitude._equal_syntax(other.amplitude)
         else:
             return self.amplitude == other.amplitude
 
     def __eq__(self, o: object) -> bool:
-        if not isinstance(o, QiPulse):
+        if not isinstance(o, _QiPulse):
             return False
         equal_length = self._are_variable_length(o) or self._are_same_length(o)
         equal_amplitude = self._are_same_amplitude(o)
@@ -259,8 +281,8 @@ class QiPulse:
                 f"Pulse length exceeds possible wait time, cycles {util.conv_time_to_cycles(length)}"
             )
 
-        if isinstance(
-            self.amplitude, _QiVariableBase
+        if (
+            isinstance(self.amplitude, QiExpression) and self.amplitude.is_dynamic()
         ):  # amplitude must be set to 1 for variable amplitude and take the value of self.amplitude otherwise
             amplitude = 1
         elif isinstance(self.amplitude, QiCellProperty):
@@ -284,7 +306,7 @@ class QiPulse:
 
         # Check if amplitude is too low and might vanish due to 16-bit quantization
         if self.mode != "off" and len(envelope) > 0:
-            max_amplitude = np.max(np.abs(envelope))
+            max_amplitude: float = np.max(np.abs(envelope))
             min_representable_amplitude = 1.0 / const.CONTROLLER_AMPLITUDE_MAX_VALUE
             if max_amplitude < min_representable_amplitude:
                 import warnings

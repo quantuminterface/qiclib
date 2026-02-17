@@ -1,0 +1,14 @@
+edition = "2023";
+
+package qicode.proto;
+
+import "qicode/proto/commands.proto";
+import "qicode/proto/cell.proto";
+
+message Job {
+    repeated Command commands = 1;
+    repeated Cell cells = 2;
+    repeated Coupler couplers = 3;
+    bool skipNcoSync = 4;
+    uint32 ncoSyncLength = 5;
+}

@@ -21,14 +21,15 @@ Here, all important commands write QiPrograms are defined.
 
 from __future__ import annotations
 
-import functools
 import warnings
-from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from enum import Enum
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+import qicode
+import qicode.proto
 from qiclib.code.qi_command import (
     AsmCommand,
     AssignCommand,
@@ -38,9 +39,7 @@ from qiclib.code.qi_command import (
     IfCommand,
     ParallelCommand,
     PlayCommand,
-    PlayFluxCommand,
     PlayReadoutCommand,
-    QiCellCommand,
     QiCommand,
     RecordingCommand,
     RotateFrameCommand,
@@ -50,7 +49,7 @@ from qiclib.code.qi_command import (
     WhileCommand,
 )
 from qiclib.code.qi_prog_builder import build_program, get_all_variables
-from qiclib.code.qi_pulse import QiPulse
+from qiclib.code.qi_pulse import Shape, ShapeLib, _QiPulse
 from qiclib.code.qi_result import QiResult
 from qiclib.code.qi_sample import QiSample
 from qiclib.code.qi_seq_instructions import SequencerInstruction
@@ -64,6 +63,8 @@ from qiclib.code.qi_var_definitions import (
     QiCellProperty,
     QiCondition,
     QiExpression,
+    QiIndexed,
+    QiOpCond,
     _QiConstValue,
     _QiStaticVariable,
     _QiVariableBase,
@@ -77,12 +78,13 @@ from qiclib.experiment.qicode.data_provider import DataProvider
 from qiclib.hardware import digital_trigger
 from qiclib.hardware.taskrunner import TaskRunner
 from qiclib.hardware.unitcell import DataCollection
+from qiclib.packages.grpc.qic_unitcell_pb2 import JobStatus
 
 if TYPE_CHECKING:
     from qiclib.experiment.qicode.base import QiCodeExperiment
 
 
-class QiCell:
+class QiCell(qicode.QiCell):
     """A QiCell is an abstract representation of the qubit/cell the program is run on.
     Usually, a single :python:`QiCell` is not instantiated, but instead a :class:`QiCells` object.
     For a single :python:`QiCell`, use instead :python:`QiCells(1)`
@@ -111,17 +113,17 @@ class QiCell:
     """
 
     def __init__(self, cell_id: int, job: QiJob | None = None):
-        self.cell_id = cell_id
-        self.manipulation_pulses: list[QiPulse] = []
+        super().__init__(cell_id)
+        self.manipulation_pulses: list[_QiPulse] = []
         self.digital_trigger_sets: list[digital_trigger.TriggerSet] = []
-        self.flux_pulses: list[QiPulse] = []
-        self.readout_pulses: list[QiPulse] = []
+        self.flux_pulses: list[_QiPulse] = []
+        self.readout_pulses: list[_QiPulse] = []
         self._result_container: dict[str, QiResult] = {}
         # The order in which recorded values are assigned to which result container
         self._result_recording_order: list[QiResult] = []
-        self._unresolved_property: set[QiCellProperty] = set()
+        self._unresolved_property: set[str] = set()
         if job is None:
-            self._job_ref = QiJob.current()
+            self._job_ref = QiJob._current()
         else:
             self._job_ref = job
         self._relevant_vars: set[_QiVariableBase] = set()
@@ -137,24 +139,12 @@ class QiCell:
 
         self._properties: dict[str | QiCellProperty, Any] = {}
 
-    def __getitem__(self, key):
-        if QiJob.current() != self._job_ref:
-            raise RuntimeError(
-                "Tried getting values for cells registered to other QiJob"
-            )
-
-        prop = self._properties.get(key, QiCellProperty(self, key))
-
-        if isinstance(prop, QiCellProperty):
-            self._unresolved_property.add(key)
-        return prop
+    @property
+    def cell_id(self) -> int:
+        return self._proto().index
 
     def __setitem__(self, key, value):
-        if QiJob.current() != self._job_ref:
-            raise RuntimeError(
-                "Tried setting values for cells registered to other QiJob"
-            )
-        self._properties[key] = value
+        raise NotImplementedError
 
     def __call__(self, qic):
         return qic.cell[self.qic_cell]
@@ -162,7 +152,7 @@ class QiCell:
     def get_properties(self):
         return self._properties.copy()
 
-    def add_pulse(self, pulse: QiPulse):
+    def add_pulse(self, pulse: _QiPulse):
         if pulse not in self.manipulation_pulses:
             self.manipulation_pulses.append(pulse)
 
@@ -223,7 +213,7 @@ class QiCell:
                 f"Cell {self.cell_id}: Multiple definitions of recording length used."
             )
 
-    def add_readout_pulse(self, pulse: QiPulse):
+    def add_readout_pulse(self, pulse: _QiPulse):
         if pulse not in self.readout_pulses:
             self.readout_pulses.append(pulse)
 
@@ -320,7 +310,7 @@ class QiCell:
         else:
             return self._result_container[name].get()
 
-    def _resolve_properties(self, len_dict: dict[QiCellProperty, Any]):
+    def _resolve_properties(self, len_dict: dict[str, Any]):
         keys = list(self._unresolved_property)
 
         missing_keys = self._unresolved_property.difference(len_dict.keys())
@@ -348,7 +338,7 @@ class QiCell:
         return f"QiCell({self.cell_id})"
 
 
-class QiCells:
+class QiCells(qicode.QiCells):
     """
     QiCells encapsulates multiple :class`QiCell` objects.
     It is a list-like object where the individual cells can be accessed using the
@@ -367,31 +357,26 @@ class QiCells:
     """
 
     def __init__(self, num: int, job: QiJob | None = None) -> None:
+        super().__init__(num)
         self.cells = [QiCell(x) for x in range(num)]
         if job is None:
-            QiJob.current()._register_cells(self.cells)
+            QiJob._current()._register_cells(self.cells)
         else:
             job._register_cells(self.cells)
 
-    def __getitem__(self, key):
-        return self.cells[key]
 
-    def __len__(self):
-        return len(self.cells)
-
-
-class QiCoupler:
+class QiCoupler(qicode.QiCoupler):
     def __init__(self, associated_unit_cell: QiCell, coupling_index: int):
         self.associated_unit_cell = associated_unit_cell
         self.coupling_index = coupling_index
-        self.coupling_pulses: list[QiPulse] = []
+        self.coupling_pulses: list[_QiPulse] = []
 
-    def add_pulse(self, pulse: QiPulse):
+    def add_pulse(self, pulse: _QiPulse):
         self.coupling_pulses.append(pulse)
         return len(self.coupling_pulses)
 
 
-class QiCouplers:
+class QiCouplers(qicode.QiCouplers):
     """
     Declares :py:`count` couplers.
 
@@ -411,356 +396,101 @@ class QiCouplers:
     """
 
     def __init__(self, count: int):
-        if len(QiJob.current().cells) == 0:
+        super().__init__(count)
+        if len(QiJob._current().cells) == 0:
             raise RuntimeError(
                 "No cells in the QiJob found."
                 "Note that couplers must be instantiated after cells."
             )
 
         self._couplers = [
-            QiCoupler(QiJob.current().cells[i // 2], i % 2) for i in range(count)
+            QiCoupler(QiJob._current().cells[i // 2], i % 2) for i in range(count)
         ]
-        QiJob.current()._register_couplers(self._couplers)
-
-    def __getitem__(self, key):
-        return self._couplers[key]
-
-    def __len__(self):
-        return len(self._couplers)
+        QiJob._current()._register_couplers(self._couplers)
 
 
-class _JobDescription:
-    """Saves experiment descriptions and handles storage of commands"""
-
-    def __init__(self) -> None:
-        self._commands: list[QiCommand] = []
-        self._ContextStack: list[list[QiCommand]] = []
-
-    def __getitem__(self, key):
-        return self._commands[key]
-
-    def __len__(self):
-        return len(self._commands)
-
-    def add_command(self, command):
-        """Checks current command for used cells and raises error, if cells are not defined for current QiJob"""
-        if isinstance(command, QiCellCommand):
-            if QiJob().current() != command.cell._job_ref:
-                raise RuntimeError("Cell not defined for current job")
-
-        self._commands.append(command)
-
-    def open_new_context(self):
-        """Saves current commands in a stack and clears command list"""
-        self._ContextStack.append(self._commands.copy())
-        self._commands = []
-
-    def close_context(self) -> list[QiCommand]:
-        """returns the current command list, and loads the commands from top of stack"""
-        current_commands = self._commands.copy()
-        self._commands = self._ContextStack.pop()
-
-        return current_commands
-
-    def reset(self):
-        self._commands = []
-        self._ContextStack = []
+If = qicode.If
+Else = qicode.Else
+Parallel = qicode.Parallel
+ForRange = qicode.ForRange
+While = qicode.While
+QiVariable = qicode.QiVariable
+Recording = qicode.Recording
+RotateFrame = qicode.RotateFrame
+DigitalTrigger = qicode.DigitalTrigger
+Wait = qicode.Wait
+Store = qicode.Store
+Assign = qicode.Assign
+ASM = qicode.ASM
+QiTimeVariable = qicode.QiTimeVariable
+QiFrequencyVariable = qicode.QiFrequencyVariable
+QiStateVariable = qicode.QiStateVariable
+QiIntVariable = qicode.QiIntVariable
+QiPhaseVariable = qicode.QiPhaseVariable
+QiAmplitudeVariable = qicode.QiAmplitudeVariable
+Sync = qicode.Sync
+Play = qicode.Play
+PlayReadout = qicode.PlayReadout
+PlayFlux = qicode.PlayFlux
+QiGate = qicode.QiGate
 
 
-_T = TypeVar("_T")
-
-
-class _QiContextManager(ABC, Generic[_T]):
-    """Base Class for If, Else, ForRange and Parallel.
-    Defines functions for storing commands."""
-
-    def __init__(self, command: _T) -> None:
-        super().__init__()
-        self._command = command
-
-    def __enter__(self):
-        QiJob.current()._open_new_context()
-        return self._command if self._command is not None else self
-
-    def __exit__(self, exception_type, exception_value, traceback):
-        self._update_body(QiJob.current()._close_context())
-
-    @abstractmethod
-    def _update_body(self, body: list[QiCommand]):
-        pass
-
-
-class If(_QiContextManager[IfCommand]):
+class SubmittedJobStatus(Enum):
+    ENQUEUED = 1
     """
-    Add conditional logic to the program.
-    If multiple cells are used inside the body, a synchronization between the cells takes place before the If.
-
-    :param condition: The condition to check
-
-    Example
-    -------
-
-    .. code-block:: python
-
-        with QiJob() as job:
-            q = QiCells(1)
-            x = QiIntVariable(1)
-            with If(x > 1):
-                ...  # won't be executed
-
-    The If statement is most commonly used to react to qubit states in real-time:
-
-    .. code-block:: python
-
-        from qiclib import jobs
-
-        with QiJob() as job:
-            q = QiCells(1)
-            state = QiStateVariable()
-            jobs.Readout(q[0], state_to=state)
-            with If(state=0):
-                ...  # Apply some conditional logic based on the qubit state
+    The job is enqueud and will run when available
     """
-
-    def __init__(self, condition: QiCondition):
-        super().__init__(IfCommand(condition))
-
-    def _update_body(self, body: list[QiCommand]):
-        self._command.body = body
-        QiJob.current()._add_command(self._command)
-
-
-class Else(_QiContextManager[None]):
+    RUNNING = 2
     """
-    Adds Conditional logic if the preceding :class:`If` command evaluates to false.
-
-    :raises RuntimeError: When the preceeding command is not an :python:`If` command
-
-    Example
-    -------
-    .. code-block:: python
-
-        from qiclib import jobs
-
-        with QiJob() as job:
-            q = QiCells(1)
-            state = QiStateVariable()
-            jobs.Readout(q[0], state_to=state)
-            with If(state=0):
-                ...  # Apply some conditional logic based on the qubit state
-            with Else():
-                ...  # State is 1
-
+    The job is currently running
     """
-
-    def __init__(self):
-        super().__init__(None)
-
-    def __enter__(self):
-        if_cmd = QiJob.current().commands[-1]
-
-        if not isinstance(if_cmd, IfCommand):
-            raise RuntimeError("Else is not preceded by If")
-
-        self.if_cmd = if_cmd
-
-        QiJob.current()._open_new_context()
-        return self
-
-    def _update_body(self, body: list[QiCommand]):
-        self.if_cmd.add_else_body(body)
-
-
-class Parallel(_QiContextManager[ParallelCommand]):
-    """Pulses defined in body are united in one trigger command."""
-
-    def __init__(self):
-        super().__init__(ParallelCommand())
-
-    def _update_body(self, body: list[QiCommand]):
-        self._command.body += body  # So visitors also find commands in Parallel blocks.
-        self._command.append_entry(body)
-
-        # If previous command is also parallel, combine by adding another parallel entry at previous command
-        try:
-            cmd = QiJob.current().commands[-1]
-            if isinstance(cmd, ParallelCommand) and len(cmd.entries) < 2:
-                cmd.entries.append(body)
-                cmd._associated_variable_set.update(
-                    self._command._associated_variable_set
-                )
-            else:
-                QiJob.current()._add_command(self._command)
-        except IndexError:
-            QiJob.current()._add_command(self._command)
-
-
-class ForRange(_QiContextManager[ForRangeCommand]):
-    """Adds ForRange to program.
-    If multiple cells are used inside body, a synchronisation between the cells is done before the ForRange as well as after the end of the body.
-    If QiTimeVariable is used as var, loops starting at 0 are unrolled, to skip pulses/waits inside body using var as length.
-    Raises exception if start, end and step are not set up properly."""
-
-    def __init__(
-        self,
-        var: _QiVariableBase,
-        start: _QiVariableBase | int | float,
-        end: _QiVariableBase | int | float,
-        step: int | float = 1,
-    ):
-        from .qi_types import (
-            _add_equal_constraints,
-            _IllegalTypeReason,
-            _TypeConstraintReasonQiCommand,
-        )
-
-        if not isinstance(var, _QiVariableBase):
-            raise RuntimeError(
-                "Can only use QiVariables as control variable in ForRanges."
-            )
-
-        start_expr = QiExpression._from(start)
-        end_expr = QiExpression._from(end)
-        step_expr = QiExpression._from(step)
-
-        var._type_info.add_illegal_type(QiType.STATE, _IllegalTypeReason.FOR_RANGE)
-        start_expr._type_info.add_illegal_type(
-            QiType.STATE, _IllegalTypeReason.FOR_RANGE
-        )
-        end_expr._type_info.add_illegal_type(QiType.STATE, _IllegalTypeReason.FOR_RANGE)
-        step_expr._type_info.add_illegal_type(
-            QiType.STATE, _IllegalTypeReason.FOR_RANGE
-        )
-
-        _add_equal_constraints(
-            QiType.TIME,
-            _TypeConstraintReasonQiCommand(ForRangeCommand),
-            var,
-            start_expr,
-            end_expr,
-            step_expr,
-        )
-        _add_equal_constraints(
-            QiType.FREQUENCY,
-            _TypeConstraintReasonQiCommand(ForRangeCommand),
-            var,
-            start_expr,
-            end_expr,
-            step_expr,
-        )
-        _add_equal_constraints(
-            QiType.PHASE,
-            _TypeConstraintReasonQiCommand(ForRange),
-            var,
-            start_expr,
-            end_expr,
-            step_expr,
-        )
-        _add_equal_constraints(
-            QiType.AMPLITUDE,
-            _TypeConstraintReasonQiCommand(ForRange),
-            var,
-            start_expr,
-            end_expr,
-            step_expr,
-        )
-        _add_equal_constraints(
-            QiType.NORMAL,
-            _TypeConstraintReasonQiCommand(ForRangeCommand),
-            var,
-            start_expr,
-            end_expr,
-            step_expr,
-        )
-
-        if not isinstance(start, _QiVariableBase) and not isinstance(
-            end, _QiVariableBase
-        ):
-            if start > end and step >= 0:
-                raise ValueError(
-                    f"Definition of ForRange faulty: start ({start}) is greater than end ({end}) and the step is positive"
-                )
-            elif start < end and step <= 0:
-                raise ValueError(
-                    f"Definition of ForRange faulty: start ({start}) is less than end ({end}) and the step is negative"
-                )
-
-        super().__init__(ForRangeCommand(var, start_expr, end_expr, step_expr, body=[]))
-
-    def _update_body(self, body: list[QiCommand]):
-        self._command.body = body
-        QiJob.current()._add_command(self._command)
-
-
-class While(_QiContextManager[WhileCommand]):
-    """Adds While loop to program.
-    If multiple cells are used inside body, a synchronisation between the cells is done before the While as well as after the end of the body.
-    The condition is evaluated before each iteration of the loop.
-
-    :param condition: The boolean condition to evaluate for continuing the loop
-
-    Example
-    -------
-
-    .. code-block:: python
-
-        with QiJob() as job:
-            q = QiCells(1)
-            state = QiVariable()
-
-            # Read out initial state
-            ql.jobs.Readout(q[0], state_to=state)
-            with While(state != 1):
-                ql.jobs.Readout(q[0], state_to=state)
+    FINISHED = 3
     """
-
-    def __init__(self, condition: QiCondition):
-        if not isinstance(condition, QiCondition):
-            raise RuntimeError(
-                "While loop condition must be a QiCondition (e.g., var1 < var2)."
-            )
-
-        super().__init__(WhileCommand(condition, body=[]))
-
-    def _update_body(self, body: list[QiCommand]):
-        self._command.body = body
-        QiJob.current()._add_command(self._command)
-
-
-def QiVariable(
-    type: QiType | type[int] | type[float] = QiType.UNKNOWN,
-    value=None,
-    name=None,
-    static: bool = False,
-) -> _QiVariableBase:
-    """Used as variables for use in program.
-    If no type is provided as an argument, it will infer its type.
+    The job has finished was not fetched
     """
-    qi_type = QiType.convert_from(type)
-    if qi_type == QiType.UNKNOWN and isinstance(value, Iterable):
-        value = list(value)
-        qi_type = QiType.ARRAY(element_type=QiType.UNKNOWN, shape=(len(value),))
-
-    if static:
-        variable = _QiStaticVariable(qi_type, value, name)
-    else:
-        variable = _QiVariableBase(qi_type, value, name)
-
-    QiJob.current()._add_command(DeclareCommand(variable))
-    if value is not None and not static and not qi_type.is_array():
-        val = _QiConstValue(value)
-        val._type_info.set_type(qi_type, _TypeDefiningUse.VARIABLE_DEFINITION)
-        QiJob.current()._add_command(AssignCommand(variable, val))
-    return variable
+    EXPIRED = 4
+    """
+    The job has finished but was never fetched and thus expired
+    """
+    FETCHED = 5
+    """
+    The job was fetched
+    """
+    CANCELED = 6
+    """
+    The job was canceled on the server side.
+    """
 
 
 class SubmittedJob:
+    """
+    A handle to a job running on the platform.
+
+    This handle can be used to query results using :meth:`results` and
+    query the current status using :meth:`status`.
+    """
+
     def __init__(self, job_id: int, exp: QiCodeExperiment):
         self.exp = exp
         self.job_id = job_id
+        self._results = None
 
-    def status(self):
-        return self.exp.qic.cell.status(self.job_id)
+    def status(self) -> SubmittedJobStatus:
+        if self._results is None:
+            grpc_status = self.exp.qic.cell.status(self.job_id)
+            if grpc_status == JobStatus.ENQUEUED:
+                return SubmittedJobStatus.ENQUEUED
+            elif grpc_status == JobStatus.RUNNING:
+                return SubmittedJobStatus.RUNNING
+            elif grpc_status == JobStatus.FINISHED:
+                return SubmittedJobStatus.FINISHED
+            elif grpc_status == JobStatus.NOT_PRESENT:
+                return SubmittedJobStatus.EXPIRED
+            else:
+                raise AssertionError(f"Unknown grpc job status {grpc_status}")
+        else:
+            # we have results -> the job was fetched
+            return SubmittedJobStatus.FETCHED
 
     def _process_results(self, result):
         # Check if some errors have been missed but do not raise an exception
@@ -773,11 +503,19 @@ class SubmittedJob:
         data_handler.process_results()
 
     def results(self):
-        results = self.exp.qic.cell.stream_results(self.job_id)
-        self._process_results(results)
+        if self._results is None:
+            self._results = self.exp.qic.cell.stream_results(self.job_id)
+            self._process_results(self._results)
+        return self._results
+
+    def __str__(self):
+        return f"SubmittedJob(id={self.job_id})"
 
 
-class QiJob:
+_LiteralType = int | float | list["_LiteralType"]
+
+
+class QiJob(qicode.QiJob):
     """
     Container holding program, cells and qi_result containers for execution of program.
     Builds the job with its properties
@@ -791,13 +529,13 @@ class QiJob:
         skip_nco_sync: bool = False,
         nco_sync_length: int = 0,
     ) -> None:
+        super().__init__(skip_nco_sync, nco_sync_length)
         self.qi_results: list[QiResult] = []
         self.cells: list[QiCell] = []
         self.couplers: list[QiCoupler] = []
-        self.skip_nco_sync = skip_nco_sync
-        self.nco_sync_length = nco_sync_length
+        self._variables: dict[int, _QiVariableBase] = {}
 
-        self._description = _JobDescription()
+        self._commands: list[QiCommand] = []
 
         # Build
         self._performed_analyses = False
@@ -809,22 +547,20 @@ class QiJob:
         self._custom_processing = None
         self._custom_data_handler = None
 
-    _current_job: QiJob | None = None
+    def get_var(self, variable: qicode.VariableRef) -> _QiVariableBase:
+        return self._variables[variable._proto().id]
 
-    @staticmethod
-    def current() -> QiJob:
-        """
-        Get the current job reference, when this job is used to build a program.
-        """
-        if QiJob._current_job is None:
-            raise RuntimeError("Can not use command outside QiJob context manager.")
-        return QiJob._current_job
+    @property
+    def skip_nco_sync(self) -> bool:
+        return self.proto().skipNcoSync
 
-    def __enter__(self):
-        QiJob._current_job = self
-        return self
+    @property
+    def nco_sync_length(self) -> int:
+        return self.proto().ncoSyncLength
 
     def __exit__(self, exception_type, exception_value, traceback):
+        super().__exit__(exception_type, exception_value, traceback)
+        self._qi_commands = self._map_commands(self.proto().commands)
         for cmd in self.commands:
             cmd.accept(QiTypeFallbackVisitor())
 
@@ -833,21 +569,377 @@ class QiJob:
 
         _QiVariableBase.reset_str_id()
 
-        QiJob._current_job = None
+    def _map_cell(self, cell: qicode.proto.Cell) -> QiCell:
+        return self.cells[cell.index]
 
-    def _open_new_context(self):
-        self._description.open_new_context()
+    def _map_literal(self, expr: qicode.proto.Expression.Literal) -> _LiteralType:
+        if expr.HasField("intLiteral"):
+            return expr.intLiteral
+        elif expr.HasField("floatLiteral"):
+            return expr.floatLiteral
+        else:
+            assert expr.HasField("arrayLiteral")
+            return list(map(self._map_literal, expr.arrayLiteral.values))
 
-    def _close_context(self):
-        return self._description.close_context()
+    def _map_expression(
+        self, expr: qicode.proto.Expression
+    ) -> QiExpression | _LiteralType:
+        if expr.HasField("literal"):
+            return self._map_literal(expr.literal)
+        if expr.HasField("variable"):
+            return self._variables[expr.variable.id]
+        if expr.HasField("binary"):
+            op_calc = {
+                qicode.proto.Expression.Binary.Operator.Plus: QiExpression.__add__,
+                qicode.proto.Expression.Binary.Operator.Minus: QiExpression.__sub__,
+                qicode.proto.Expression.Binary.Operator.Mult: QiExpression.__mul__,
+                qicode.proto.Expression.Binary.Operator.Lsh: QiExpression.__lshift__,
+                qicode.proto.Expression.Binary.Operator.Rsh: QiExpression.__rshift__,
+                qicode.proto.Expression.Binary.Operator.And: QiExpression.__and__,
+                qicode.proto.Expression.Binary.Operator.Or: QiExpression.__or__,
+                qicode.proto.Expression.Binary.Operator.Xor: QiExpression.__xor__,
+            }.get(expr.binary.op)
+            assert op_calc is not None, (
+                f"Cannot form condition with operator {expr.binary.op}"
+            )
+            val1 = QiExpression._from(self._map_expression(expr.binary.lhs))
+            return op_calc(
+                val1, QiExpression._from(self._map_expression(expr.binary.rhs))
+            )
+        if expr.HasField("property"):
+            cell = self._map_cell(expr.property.cell)
+            prop = QiCellProperty(cell, name=expr.property.name)
+            cell._unresolved_property.add(expr.property.name)
+            return prop
+        if expr.HasField("typeCast"):
+            value = self._map_expression(expr.typeCast.expr)
+            if not isinstance(value, int | float | _QiConstValue):
+                raise NotImplementedError(
+                    f"Type cast for non-constant value {value.__class__.__name__}"
+                )
+            const = value if isinstance(value, _QiConstValue) else _QiConstValue(value)
+            typ = self._map_type(expr.typeCast.targetType)
+            const._type_info.set_type(typ, _TypeDefiningUse.VALUE_DEFINITION)
+            return const
+        if expr.HasField("indexed"):
+            base = self._map_expression(expr.indexed.base)
+            assert isinstance(base, _QiVariableBase)
+            index = self._map_expression(expr.indexed.value)
+            return QiIndexed(base, QiExpression._from(index))
+        else:
+            assert expr.HasField("unary"), f"Unknown expression {expr}"
+            op = {
+                qicode.proto.Expression.Unary.Operator.Minus: QiExpression.__invert__,
+            }.get(expr.unary.op)
+            if op is None:
+                raise NotImplementedError(f"Unary operator {expr.unary.op}")
+            val1 = self._map_expression(expr.unary.expr)
+            return op(QiExpression._from(val1))
 
-    def _add_command(self, command):
-        self._description.add_command(command)
+    def _map_type(self, typ: qicode.proto.Type) -> QiType:
+        return QiType(typ)
+
+    def _map_recording_command(
+        self, cmd: qicode.proto.RecordingCommand, commands: list[QiCommand]
+    ) -> RecordingCommand:
+        def opt_field(field_name, mapper=lambda x: x):
+            if cmd.HasField(field_name):
+                return mapper(getattr(cmd, field_name))
+            else:
+                return None
+
+        save_to = opt_field("save_to")
+        state_to = opt_field("state_to", lambda state_to: self._variables[state_to.id])
+        duration = opt_field("duration", self._map_expression)
+        offset = opt_field("offset", self._map_expression)
+        if cmd.mode == qicode.proto.RecordingCommand.Mode.ContinuousOn:
+            toggle_continuous = True
+        elif cmd.mode == qicode.proto.RecordingCommand.Mode.ContinuousOff:
+            toggle_continuous = False
+        else:
+            toggle_continuous = None
+        recording_cmd = RecordingCommand(
+            self._map_cell(cmd.cell),
+            save_to,
+            state_to,
+            duration,
+            offset,
+            toggle_continuous,
+        )
+        try:
+            last_command = commands[-1]
+            if (
+                isinstance(last_command, PlayReadoutCommand)
+                and last_command.cell == recording_cmd.cell
+            ):
+                recording_cmd.follows_readout = True
+                last_command.recording = recording_cmd
+                last_command._associated_variable_set.update(
+                    recording_cmd._associated_variable_set
+                )
+        except IndexError:
+            pass
+
+        return recording_cmd
+
+    def _map_pulse(self, pulse: qicode.proto.Pulse) -> _QiPulse:
+        if pulse.HasField("off"):
+            return _QiPulse.off()
+        elif pulse.HasField("continuous"):
+            if pulse.continuous.HasField("frequency"):
+                frequency_expr = self._map_expression(pulse.continuous.frequency)
+            else:
+                frequency_expr = None
+            return _QiPulse.cw(
+                self._map_expression(pulse.continuous.amplitude),
+                self._map_expression(pulse.continuous.phase),
+                frequency_expr,
+            )
+        elif pulse.HasField("discrete"):
+            if pulse.discrete.HasField("shape"):
+                shape = Shape.REGISTRY.get(pulse.discrete.shape.id)
+                if shape is None:
+                    raise RuntimeError(
+                        f"Shape with ID {pulse.discrete.shape.id} is not registered"
+                    )
+            else:
+                shape = ShapeLib.rect
+            if pulse.discrete.HasField("frequency"):
+                frequency_expr = self._map_expression(pulse.discrete.frequency)
+            else:
+                frequency_expr = None
+            return _QiPulse(
+                self._map_expression(pulse.discrete.length),
+                shape,
+                self._map_expression(pulse.discrete.amplitude),
+                self._map_expression(pulse.discrete.phase),
+                frequency_expr,
+                pulse.discrete.hold,
+            )
+        else:
+            raise AssertionError(f"Unknown pulse type {pulse}")
+
+    def _map_condition(self, expr: qicode.proto.Expression) -> QiCondition:
+        if expr.HasField("binary"):
+            op_calc = {
+                qicode.proto.Expression.Binary.Operator.Lt: QiOpCond.LT,
+                qicode.proto.Expression.Binary.Operator.Le: QiOpCond.LE,
+                qicode.proto.Expression.Binary.Operator.Eq: QiOpCond.EQ,
+                qicode.proto.Expression.Binary.Operator.Gt: QiOpCond.GT,
+                qicode.proto.Expression.Binary.Operator.Ge: QiOpCond.GE,
+                qicode.proto.Expression.Binary.Operator.Eq: QiOpCond.EQ,
+                qicode.proto.Expression.Binary.Operator.Ne: QiOpCond.NE,
+            }.get(expr.binary.op)
+            assert op_calc is not None, (
+                f"Cannot form condition with operator {expr.binary.op}"
+            )
+            return QiCondition(
+                val1=QiExpression._from(self._map_expression(expr.binary.lhs)),
+                op=op_calc,
+                val2=QiExpression._from(self._map_expression(expr.binary.rhs)),
+            )
+        else:
+            raise ValueError("Expression must be a binary condition")
+
+    def _map_command(
+        self, command: qicode.proto.Command, commands: list[QiCommand]
+    ) -> None:
+        if command.HasField("digitalTriggerCommand"):
+            qi_expr = self._map_expression(command.digitalTriggerCommand.length)
+            assert isinstance(qi_expr, int | float), (
+                "digital trigger length must be a constant"
+            )
+            commands.append(
+                DigitalTriggerCommand(
+                    self._map_cell(command.digitalTriggerCommand.cell),
+                    list(command.digitalTriggerCommand.outputs),
+                    qi_expr,
+                )
+            )
+        elif command.HasField("waitCommand"):
+            commands.append(
+                WaitCommand(
+                    self._map_cell(command.waitCommand.cell),
+                    self._map_expression(command.waitCommand.length),
+                )
+            )
+        elif command.HasField("recordingCommand"):
+            rec = self._map_recording_command(command.recordingCommand, commands)
+            # When True, RecordingCommand is added to the readout command
+            if not rec.follows_readout:
+                commands.append(rec)
+        elif command.HasField("playCommand"):
+            commands.append(
+                PlayCommand(
+                    self._map_cell(command.playCommand.cell),
+                    self._map_pulse(command.playCommand.pulse),
+                )
+            )
+        elif command.HasField("playReadoutCommand"):
+            commands.append(
+                PlayReadoutCommand(
+                    self._map_cell(command.playReadoutCommand.cell),
+                    self._map_pulse(command.playReadoutCommand.pulse),
+                )
+            )
+        elif command.HasField("playFluxCommand"):
+            raise NotImplementedError("PlayFluxCommand")
+        elif command.HasField("rotateFrameCommand"):
+            expr = self._map_expression(command.rotateFrameCommand.angle)
+            assert isinstance(expr, float | int), (
+                "Rotate Frame command must be constant"
+            )
+            commands.append(
+                RotateFrameCommand(
+                    self._map_cell(command.rotateFrameCommand.cell), angle=expr
+                )
+            )
+        elif command.HasField("syncCommand"):
+            commands.append(
+                SyncCommand(
+                    [self._map_cell(cell) for cell in command.syncCommand.cells]
+                )
+            )
+        elif command.HasField("storeCommand"):
+            result = QiResult(command.storeCommand.saveTo)
+            commands.append(
+                StoreCommand(
+                    self._map_cell(command.storeCommand.cell),
+                    store_var=self._variables[command.storeCommand.var.id],
+                    save_to=result,
+                )
+            )
+        elif command.HasField("assignCommand"):
+            commands.append(
+                AssignCommand(
+                    self._variables[command.assignCommand.destination.id],
+                    self._map_expression(command.assignCommand.value),
+                )
+            )
+        elif command.HasField("declareCommand"):
+            qi_type = self._map_type(command.declareCommand.type)
+            if command.declareCommand.HasField("initialValue"):
+                value = self._map_expression(command.declareCommand.initialValue)
+                assert isinstance(value, int | float | list)
+            else:
+                value = None
+
+            if qi_type == QiType.UNKNOWN and isinstance(value, list):
+                qi_type = QiType.ARRAY(element_type=QiType.UNKNOWN, length=len(value))
+
+            if command.declareCommand.HasField("name"):
+                name = command.declareCommand.name
+            else:
+                name = None
+
+            static = command.declareCommand.static
+
+            if static:
+                var = _QiStaticVariable(qi_type, value, name)
+            else:
+                var = _QiVariableBase(qi_type, value, name)
+
+            self._variables[command.declareCommand.var.id] = var
+            commands.append(DeclareCommand(var))
+            if value is not None and not static and not qi_type.is_array():
+                val = _QiConstValue(value)
+                val._type_info.set_type(qi_type, _TypeDefiningUse.VARIABLE_DEFINITION)
+                commands.append(AssignCommand(var, val))
+        elif command.HasField("whileCommand"):
+            while_cm = command.whileCommand
+            commands.append(
+                WhileCommand(
+                    self._map_condition(while_cm.condition),
+                    self._map_commands(while_cm.body),
+                )
+            )
+        elif command.HasField("ifCommand"):
+            if_cm = command.ifCommand
+            commands.append(
+                IfCommand(
+                    self._map_condition(if_cm.condition), self._map_commands(if_cm.body)
+                )
+            )
+        elif command.HasField("elseCommand"):
+            else_cm = command.elseCommand
+            if len(commands) == 0:
+                raise RuntimeError("Else is not preceded by If")
+            if_cmd = commands[-1]
+            if not isinstance(if_cmd, IfCommand):
+                raise RuntimeError("Else is not preceded by If")
+            if_cmd.add_else_body(self._map_commands(else_cm.body))
+        elif command.HasField("parallelCommand"):
+            parallel_cm = ParallelCommand()
+            body = self._map_commands(command.parallelCommand.body)
+            parallel_cm.body += (
+                body  # So visitors also find commands in Parallel blocks.
+            )
+            parallel_cm.append_entry(body)
+
+            # If previous command is also parallel, combine by adding another parallel entry at previous command
+            try:
+                cmd = commands[-1]
+                if isinstance(cmd, ParallelCommand) and len(cmd.entries) < 2:
+                    cmd.entries.append(body)
+                    cmd._associated_variable_set.update(
+                        parallel_cm._associated_variable_set
+                    )
+                else:
+                    commands.append(parallel_cm)
+            except IndexError:
+                commands.append(parallel_cm)
+        elif command.HasField("asmCommand"):
+            seq_instr = SequencerInstruction.from_str(command.asmCommand.instruction)
+            # TODO: correct length in cycles (should be from ASM command)
+            commands.append(
+                AsmCommand(
+                    self._map_cell(command.asmCommand.cell),
+                    seq_instr,
+                    1,
+                )
+            )
+        elif command.HasField("forRangeCommand"):
+            var = self._variables[command.forRangeCommand.var.id]
+            commands.append(
+                ForRangeCommand(
+                    var,
+                    self._map_expression(command.forRangeCommand.start),
+                    self._map_expression(command.forRangeCommand.end),
+                    self._map_expression(command.forRangeCommand.step),
+                    self._map_commands(command.forRangeCommand.body),
+                )
+            )
+        elif command.HasField("gateCommand"):
+            new_commands = self._map_commands(command.gateCommand.body)
+            find_cells = QiCMContainedCellVisitor()
+
+            for cmd in new_commands:
+                cmd.accept(find_cells)
+
+                if isinstance(cmd, AssignCommand):
+                    raise RuntimeError(
+                        "Assign inside QiGate might result in unwanted side effects."
+                    )
+
+            if len(find_cells.contained_cells) > 1:
+                commands.append(SyncCommand(list(find_cells.contained_cells)))
+
+            commands.extend(new_commands)
+        else:
+            raise NotImplementedError(f"Command {command}")
+
+    def _map_commands(
+        self, commands: Iterable[qicode.proto.Command]
+    ) -> list[QiCommand]:
+        ret_commands: list[QiCommand] = []
+        for command in commands:
+            self._map_command(command, ret_commands)
+        return ret_commands
 
     @property
     def commands(self):
         """returns the commands of the job"""
-        return self._description._commands
+        return self._qi_commands
 
     def _register_cells(self, cells: list[QiCell]):
         if len(self.cells) > 0:
@@ -935,7 +1027,7 @@ class QiJob:
         self.cell_seq_dict = build_program(
             self.cells,
             cell_map,
-            self._description._commands.copy(),
+            self.commands,
             self.skip_nco_sync,
             self.nco_sync_length,
         )
@@ -958,7 +1050,7 @@ class QiJob:
         coupling_map: list[int] | None = None,
         data_collection=None,
         use_taskrunner=False,
-    ):
+    ) -> QiCodeExperiment:
         from ..experiment.qicode.base import QiCodeExperiment
 
         exp = QiCodeExperiment(
@@ -1075,7 +1167,7 @@ class QiJob:
         :param sample: the QiSample object used for execution of pulses and extracts parameters for the experiment
         :param averages: the number of executions that should be averaged, by default 1
         :param cell_map: A list containing the indices of the cells
-        :param cell_map: A list containing the indices of the couplers
+        :param coupling_map: A list containing the indices of the couplers
         :param data_collection: the data_collection mode for the result, by default "average"
         :param use_taskrunner: if the execution should be handled by the Taskrunner
             Some advanced schemes and data_collection modes are currently only supported
@@ -1214,208 +1306,3 @@ class QiJob:
 
         stringify_job = QiStringifyJob()
         return stringify_job.stringify(self)
-
-
-def Sync(*cells: QiCell):
-    """Synchronize cells. Currently implemented by comparing cycle times and adding wait commands. Cannot Sync after If/Else, or load/store to time variables"""
-    QiJob.current()._add_command(SyncCommand(list(cells)))
-
-
-def Play(cell: QiCell, pulse: QiPulse):
-    """Add Manipulation command and pulse to cell
-
-    :param cell: the cell that plays the pulse
-    :param pulse: the pulse to play
-    """
-    QiJob.current()._add_command(PlayCommand(cell, pulse))
-
-
-def PlayReadout(cell: QiCell, pulse: QiPulse):
-    """Add Readout command and pulse to cell
-
-    :param cell: the cell that plays the readout
-    :param pulse: the readout to play
-    """
-    QiJob.current()._add_command(PlayReadoutCommand(cell, pulse))
-
-
-def PlayFlux(coupler: QiCoupler, pulse: QiPulse):
-    """
-    Add Flux Pulse command to cell
-
-    :param coupler: The coupler that plays the pulse
-    :param pulse: The pulse to play
-    """
-    QiJob.current()._add_command(PlayFluxCommand(coupler, pulse))
-
-
-def RotateFrame(cell: QiCell, angle: float):
-    """Rotates the reference frame of the manipulation pulses played with :python:`Play()`.
-    This corresponds to an instantaneous, virtual Z rotation on the Bloch sphere.
-
-    :param cell: the cell for the rotation
-    :param angle: the angle of the rotation
-    """
-    QiJob.current()._add_command(RotateFrameCommand(cell, angle))
-
-
-def Recording(
-    cell: QiCell,
-    duration: int | float | QiCellProperty,
-    offset: int | float | QiCellProperty | QiExpression = 0,
-    save_to: str | None = None,
-    state_to: _QiVariableBase | None = None,
-    toggleContinuous: bool | None = None,
-):
-    """Add Recording command to cell
-
-    :param cell: the QiCell for the recording
-    :param duration: the duration of the recording window in seconds
-    :param offset: the offset of the recording window in seconds
-    :param save_to: the name of the QiResult where to save the result data
-    :param state_to: the variable in which the obtained qubit state should be stored
-    :param toggleContinuous: whether the recording should be repeated continously and seemlessly
-        Value True will start the recording, False will stop it (None is for normal mode)
-    """
-    rec = RecordingCommand(
-        cell,
-        save_to,
-        state_to,
-        length=duration,
-        offset=offset,
-        toggle_continuous=toggleContinuous,
-    )
-    # When True, RecordingCommand is added to the readout command
-    if not rec.follows_readout:
-        QiJob.current()._add_command(rec)
-
-
-def DigitalTrigger(
-    cell: QiCell,
-    length: float,
-    outputs: Iterable[int],
-):
-    """
-    Adds a digital trigger command to the cell.
-
-    Digital triggers are visible at auxiliary outputs and can be used, for example, to trigger external electronics
-    simultaneously to outputting a pulse.
-    The time resolution of digital triggers is 4 ns.
-
-    =======
-    Example
-    =======
-
-    The following QiJob Generates a 12 ns long pulse at digital outputs 3 and 6:
-
-    .. code-block:: python
-
-        with QiJob() as job:
-            q = QiCells(1)
-            DigitalTrigger(q[0], length=12e-9, outputs=(3, 6))
-
-    ===================================================
-    Combining the output of multiple Digital Unit Cells
-    ===================================================
-
-    Each Digital Unit Cell can trigger each output.
-    To combine multiple outputs to multiple inputs, all digital outputs are combined using a logical OR operation.
-
-    ================
-    Delaying outputs
-    ================
-
-    A static delay can be added to each output using
-    :python:`QiController.digital_trigger.set_delay(output_number, delay_in_seconds)`.
-    To add a variable amount of time, use :python:`Wait(cell, duration)` before calling :python:`DigitalTrigger`
-
-    :param cell: The cell that is responsible for the outputting the digital trigger
-    :param length: The duration of the pulse in seconds. Should be a multiple of four ns
-    :param outputs: The outputs to trigger. This can also be an expression like :python:`range(0, 8)`
-        to trigger all outputs.
-    """
-    QiJob.current()._add_command(DigitalTriggerCommand(cell, list(outputs), length))
-
-
-def Wait(cell: QiCell, delay: int | float | QiExpression):
-    """Add Wait command to cell. delay can be int or QiVariable
-
-    :param cell: the QiCell that should wait
-    :param delay: the time to wait in seconds
-    """
-    QiJob.current()._add_command(WaitCommand(cell, delay))
-
-
-def Store(cell: QiCell, variable: _QiVariableBase, save_to: QiResult):
-    """Not implemented yet. Add Store command to cell."""
-    QiJob.current()._add_command(StoreCommand(cell, variable, save_to))
-
-
-def Assign(dst: _QiVariableBase, calc: QiExpression | float | int):
-    """Assigns a calculated value to a destination
-
-    :param dst: the destination
-    :param calc: the calculation to perform
-    """
-    QiJob.current()._add_command(AssignCommand(dst, calc))
-
-
-def ASM(cell: QiCell, instr: SequencerInstruction, cycles=1):
-    """Insert assembly instruction"""
-    QiJob.current()._add_command(AsmCommand(cell, instr, cycles))
-
-
-def QiGate(func):
-    """decorator for using a function in a QiJob
-
-    :raises RuntimeError: if QiGate inside QiGate
-    """
-
-    @functools.wraps(func)
-    def wrapper_QiGate(*args, **kwargs):
-        start = len(QiJob.current().commands)
-
-        func(*args, **kwargs)
-
-        end = len(QiJob.current().commands)
-
-        find_cells = QiCMContainedCellVisitor()
-
-        for cmd in QiJob.current().commands[start:end]:
-            cmd.accept(find_cells)
-
-            if isinstance(cmd, AssignCommand):
-                raise RuntimeError(
-                    "Assign inside QiGate might result in unwanted side effects."
-                )
-
-        if len(find_cells.contained_cells) > 1:
-            QiJob.current().commands.insert(
-                start, SyncCommand(list(find_cells.contained_cells))
-            )
-
-    return wrapper_QiGate
-
-
-def QiTimeVariable(value=None, name=None, static: bool = False):
-    return QiVariable(type=QiType.TIME, value=value, name=name, static=static)
-
-
-def QiFrequencyVariable(value=None, name=None, static: bool = False):
-    return QiVariable(type=QiType.FREQUENCY, value=value, name=name, static=static)
-
-
-def QiStateVariable(name=None, static: bool = False):
-    return QiVariable(type=QiType.STATE, name=name, static=static)
-
-
-def QiIntVariable(value=None, name=None, static: bool = False):
-    return QiVariable(type=QiType.NORMAL, value=value, name=name, static=static)
-
-
-def QiPhaseVariable(value=None, name=None, static: bool = False):
-    return QiVariable(type=QiType.PHASE, value=value, name=name, static=static)
-
-
-def QiAmplitudeVariable(value=None, name=None, static: bool = False):
-    return QiVariable(type=QiType.AMPLITUDE, value=value, name=name, static=static)

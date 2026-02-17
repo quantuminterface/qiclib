@@ -257,7 +257,7 @@ class QiResultCollector(QiCommandVisitor):
         self.if_else_depth = 0
 
     def visit_cell_command(self, cell_cmd, *args, **kwargs):
-        from .qi_jobs import PlayReadoutCommand, RecordingCommand
+        from qiclib.code.qi_command import PlayReadoutCommand, RecordingCommand
 
         if isinstance(cell_cmd, PlayReadoutCommand) and cell_cmd.recording is not None:
             cell_cmd = cell_cmd.recording

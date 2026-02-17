@@ -58,9 +58,10 @@ from .qi_jobs import (
     Wait,
     While,
 )
-from .qi_pulse import QiPulse, ShapeLib
+from .qi_pulse import QiPulse, Shape, ShapeLib
 from .qi_result import QiResult
 from .qi_sample import QiSample
+from .qi_types import QiType
 
 __all__ = [
     "Assign",
@@ -87,9 +88,11 @@ __all__ = [
     "QiSample",
     "QiStateVariable",
     "QiTimeVariable",
+    "QiType",
     "QiVariable",
     "Recording",
     "RotateFrame",
+    "Shape",
     "ShapeLib",
     "Sync",
     "Wait",

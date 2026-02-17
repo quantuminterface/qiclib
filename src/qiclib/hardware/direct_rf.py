@@ -43,6 +43,10 @@ class _Channel(abc.ABC):
         self._index = index
 
     @property
+    def chno(self) -> int:
+        return self._channel
+
+    @property
     def frequency(self):
         return self._stub.GetFrequency(self._index).value
 

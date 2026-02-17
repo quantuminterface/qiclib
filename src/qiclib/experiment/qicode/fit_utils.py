@@ -50,7 +50,7 @@ def compute_custom_piecewise_linear_fit(offsets, amplitude):
                 bounds=bounds,
             )
 
-            t1, t2, A1, A2 = popt
+            t1, t2, _, _ = popt
             if t1 == t2:
                 print("Note: No region 2 detected (t1 == t2).")
             if t2 >= max(offsets):

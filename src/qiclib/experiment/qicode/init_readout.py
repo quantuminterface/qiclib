@@ -137,7 +137,7 @@ def calibrate_electrical_delay(
 
     fit_params = compute_custom_piecewise_linear_fit(offsets, amplitude)
     if fit_params is not None:
-        t1, t2, A1, A2 = fit_params
+        t1, _, _, _ = fit_params
         max_offset = t1
     else:
         max_offset = None

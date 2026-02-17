@@ -30,7 +30,7 @@ import qiclib.packages.grpc.pulsegen_pb2 as pulsegen_proto
 import qiclib.packages.grpc.qic_unitcell_pb2 as unitcell_proto
 import qiclib.packages.grpc.sequencer_pb2 as sequencer_proto
 from qiclib.code.qi_jobs import QiCell, QiCoupler
-from qiclib.code.qi_pulse import QiPulse
+from qiclib.code.qi_pulse import _QiPulse
 from qiclib.code.qi_sequencer import ForRangeEntry, Sequencer
 from qiclib.code.qi_types import QiType
 from qiclib.code.qi_var_definitions import _QiVariableBase
@@ -243,7 +243,7 @@ class QiCodeExperiment(BaseExperiment):
                 if pulse.is_variable_length:
                     # special pulse to end a parametrized readout
                     self.load_pulse(
-                        QiPulse(4e-09, amplitude=0),
+                        _QiPulse(4e-09, amplitude=0),
                         qic_cell.readout.triggerset[Sequencer.CHOKE_PULSE_INDEX],
                     )
 
@@ -276,7 +276,7 @@ class QiCodeExperiment(BaseExperiment):
                 if pulse.is_variable_length:
                     # special pulse to end a parametrized readout
                     self.load_pulse(
-                        QiPulse(4e-09, amplitude=0),
+                        _QiPulse(4e-09, amplitude=0),
                         qic_cell.manipulation.triggerset[Sequencer.CHOKE_PULSE_INDEX],
                     )
 
@@ -488,7 +488,7 @@ class QiCodeExperiment(BaseExperiment):
 
         return result
 
-    def load_pulse(self, pulse: QiPulse, triggerset: TriggerSet):
+    def load_pulse(self, pulse: _QiPulse, triggerset: TriggerSet):
         """loads qkit pulse() in the triggerset of the QiController
 
         :param pulse: The qkit Pulse() instance.
@@ -598,7 +598,7 @@ class QiCodeExperiment(BaseExperiment):
                     readout_config.pulses.append(
                         self._pulse_to_grpc_pulse(
                             Sequencer.CHOKE_PULSE_INDEX,
-                            QiPulse(length=4e-9, amplitude=0),
+                            _QiPulse(length=4e-9, amplitude=0),
                         )
                     )
                     choke_pulse_added = True
@@ -622,7 +622,7 @@ class QiCodeExperiment(BaseExperiment):
                     drive_config.pulses.append(
                         self._pulse_to_grpc_pulse(
                             Sequencer.CHOKE_PULSE_INDEX,
-                            QiPulse(length=4e-9, amplitude=0),
+                            _QiPulse(length=4e-9, amplitude=0),
                         )
                     )
                     choke_pulse_added = True

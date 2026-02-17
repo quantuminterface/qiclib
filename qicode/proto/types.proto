@@ -1,0 +1,27 @@
+edition = "2023";
+
+package qicode.proto;
+
+message Type {
+    enum Scalar {
+        Time = 0;
+        State = 1;
+        Normal = 2;
+        Frequency = 3;
+        Phase = 4;
+        Amplitude = 5;
+    }
+    message Unknown {};
+    message Array {
+        Type type = 1;
+        oneof known_length {
+            uint32 length = 2;
+            // not set
+        }
+    }
+    oneof kind {
+        Scalar scalar = 1;
+        Unknown unknown = 2;
+        Array array = 3;
+    }
+}

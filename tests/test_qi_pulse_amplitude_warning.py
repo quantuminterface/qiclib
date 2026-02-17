@@ -4,7 +4,7 @@ import warnings
 
 import pytest
 
-from qiclib.code.qi_pulse import QiPulse
+from qiclib.code.qi_pulse import _QiPulse
 from qiclib.packages.constants import CONTROLLER_AMPLITUDE_MAX_VALUE
 
 
@@ -13,7 +13,7 @@ def test_low_amplitude_triggers_warning():
     min_amplitude = 1.0 / CONTROLLER_AMPLITUDE_MAX_VALUE
     low_amplitude = min_amplitude * 0.5  # Half the minimum
 
-    pulse = QiPulse(length=1e-6, amplitude=low_amplitude)
+    pulse = _QiPulse(length=1e-6, amplitude=low_amplitude)
 
     with pytest.warns(
         UserWarning, match="below the minimum representable value.*will vanish"
@@ -23,7 +23,7 @@ def test_low_amplitude_triggers_warning():
 
 def test_zero_amplitude_triggers_warning():
     """Test that zero amplitude triggers warning."""
-    pulse = QiPulse(length=1e-6, amplitude=0.0)
+    pulse = _QiPulse(length=1e-6, amplitude=0.0)
 
     with pytest.warns(UserWarning, match="below the minimum representable value"):
         pulse(1e9)
@@ -34,7 +34,7 @@ def test_amplitude_above_threshold_no_warning():
     min_amplitude = 1.0 / CONTROLLER_AMPLITUDE_MAX_VALUE
     high_amplitude = min_amplitude * 2.0  # Double the minimum
 
-    pulse = QiPulse(length=1e-6, amplitude=high_amplitude)
+    pulse = _QiPulse(length=1e-6, amplitude=high_amplitude)
 
     with warnings.catch_warnings():
         warnings.simplefilter(
@@ -45,7 +45,7 @@ def test_amplitude_above_threshold_no_warning():
 
 def test_normal_amplitude_no_warning():
     """Test that normal amplitude does not trigger warning."""
-    pulse = QiPulse(length=1e-6, amplitude=0.5)
+    pulse = _QiPulse(length=1e-6, amplitude=0.5)
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
@@ -55,7 +55,7 @@ def test_normal_amplitude_no_warning():
 def test_empty_envelope_no_warning():
     """Test that empty envelope (very short pulse) does not trigger amplitude warning."""
     # This should trigger the existing short pulse warning, not the amplitude warning
-    pulse = QiPulse(length=1e-12, amplitude=0.5)  # Very short pulse
+    pulse = _QiPulse(length=1e-12, amplitude=0.5)  # Very short pulse
 
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
@@ -70,7 +70,7 @@ def test_empty_envelope_no_warning():
 
 def test_off_pulse_no_warning():
     """Test that an 'off' pulse does not trigger a warning"""
-    pulse = QiPulse.off()  # Very short pulse
+    pulse = _QiPulse.off()  # Very short pulse
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")

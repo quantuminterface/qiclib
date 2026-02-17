@@ -1,0 +1,74 @@
+edition = "2023";
+
+package qicode.proto;
+
+import "qicode/proto/variables.proto";
+import "qicode/proto/cell.proto";
+import "qicode/proto/types.proto";
+
+message CellProperty {
+    Cell cell = 1;
+    string name = 2;
+    Expression defaultValue = 3;
+}
+
+message Expression {
+    message Binary {
+        enum Operator {
+            Plus = 0;
+            Minus = 1;
+            Mult = 2;
+            Div = 3;
+            Lsh = 4;
+            Rsh = 5;
+            And = 6;
+            Or = 7;
+            Xor = 8;
+            Lt = 9;
+            Le = 10;
+            Gt = 11;
+            Ge = 12;
+            Eq = 13;
+            Ne = 14;
+        }
+        Expression lhs = 1;
+        Operator op = 2;
+        Expression rhs = 3;
+    }
+    message Unary {
+        enum Operator {
+            Plus = 0;
+            Minus = 1;
+            Not = 2;
+        }
+        Expression expr = 1;
+        Operator op = 2;
+    }
+    message Index {
+        Expression base = 1;
+        Expression value = 2;
+    }
+    message TypeCast {
+        Expression expr = 1;
+        Type targetType = 2;
+    }
+    message Literal {
+        oneof kind {
+            int64 intLiteral = 1;
+            double floatLiteral = 2;
+            Array arrayLiteral = 3;
+        }
+        message Array {
+            repeated Literal values = 1;
+        }
+    }
+    oneof kind {
+        Literal literal = 1;
+        CellProperty property = 2;
+        Variable variable = 3;
+        Binary binary = 4;
+        Unary unary = 5;
+        TypeCast typeCast = 6;
+        Index indexed = 7;
+    }
+}

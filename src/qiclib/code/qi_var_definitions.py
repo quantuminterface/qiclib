@@ -29,6 +29,7 @@ from collections.abc import Iterable, Set
 from enum import Enum
 
 import qiclib.packages.utility as util
+import qicode
 from qiclib.code.qi_visitor import QiExpressionVisitor
 
 from .qi_types import (
@@ -363,7 +364,7 @@ class _QiConstValue(QiExpression):
     it has been converted to the integer representation used by the sequencer.
     """
 
-    def __init__(self, value: int | float):
+    def __init__(self, value: int | float, type: QiType | None = None):
         super().__init__()
 
         self._given_value = value  # Value given to the constructor. Is interpreted differently depending on the type.
@@ -379,6 +380,9 @@ class _QiConstValue(QiExpression):
             self._type_info.add_illegal_type(
                 QiType.NORMAL, _IllegalTypeReason.INVALID_NORMAL_CONSTANT
             )
+
+        if type is not None:
+            self._type_info.set_type(type, _TypeDefiningUse.VALUE_DEFINITION)
 
     @property
     def float_value(self):
@@ -449,34 +453,12 @@ class _QiConstValue(QiExpression):
         return f"{value:g}"
 
 
-class QiNormalValue(_QiConstValue):
-    def __init__(self, value: int):
-        super().__init__(value)
-        self._type_info.set_type(QiType.NORMAL, _TypeDefiningUse.VALUE_DEFINITION)
-
-
-class QiTimeValue(_QiConstValue):
-    def __init__(self, value: int | float):
-        super().__init__(value)
-        self._type_info.set_type(QiType.TIME, _TypeDefiningUse.VALUE_DEFINITION)
-
-
-class QiFrequencyValue(_QiConstValue):
-    def __init__(self, value: int | float):
-        super().__init__(value)
-        self._type_info.set_type(QiType.FREQUENCY, _TypeDefiningUse.VALUE_DEFINITION)
-
-
-class QiPhaseValue(_QiConstValue):
-    def __init__(self, value: int | float):
-        super().__init__(value)
-        self._type_info.set_type(QiType.PHASE, _TypeDefiningUse.VALUE_DEFINITION)
-
-
-class QiAmplitudeValue(_QiConstValue):
-    def __init__(self, value: int | float):
-        super().__init__(value)
-        self._type_info.set_type(QiType.AMPLITUDE, _TypeDefiningUse.VALUE_DEFINITION)
+QiConst = qicode.QiConst
+QiNormalValue = qicode.QiNormalValue
+QiTimeValue = qicode.QiTimeValue
+QiFrequencyValue = qicode.QiFrequencyValue
+QiPhaseValue = qicode.QiPhaseValue
+QiAmplitudeValue = qicode.QiAmplitudeValue
 
 
 class QiCellProperty(QiExpression):

@@ -1,0 +1,46 @@
+# CMake build artifacts
+build/
+cmake_install.cmake
+CMakeCache.txt
+CMakeFiles/
+*.cmake
+
+# Generated proto files
+generated/
+*.pb.cc
+*.pb.h
+
+# Build artifacts
+*.a
+*.o
+*.so
+*.dylib
+*.lib
+*.dll
+*.exe
+
+# IDE
+.vscode/
+.idea/
+*.sln
+*.vcxproj*
+*.xcodeproj/
+*.swp
+*.swo
+*~
+
+# Conan
+conanbuild.cmake
+conantoolchain.cmake
+conaninfo.txt
+graph_info.json
+ConanPresets.json
+
+# Testing
+Testing/
+CTestTestfile.cmake
+
+# Misc
+.DS_Store
+*.pyc
+__pycache__/

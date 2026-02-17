@@ -21,8 +21,11 @@ import numpy as np
 import pytest
 
 import qiclib.packages.utility as util
+import qicode.proto
 from qiclib.code.qi_command import (
     AssignCommand,
+    ForRangeCommand,
+    IfCommand,
     ParallelCommand,
     PlayCommand,
     PlayReadoutCommand,
@@ -37,13 +40,12 @@ from qiclib.code.qi_jobs import (
     Parallel,
     Play,
     PlayReadout,
+    QiAmplitudeVariable,
     QiCell,
-    QiCellProperty,
     QiCells,
     QiFrequencyVariable,
     QiGate,
     QiJob,
-    QiResult,
     QiSample,
     QiStateVariable,
     QiTimeVariable,
@@ -56,12 +58,14 @@ from qiclib.code.qi_jobs import (
 )
 from qiclib.code.qi_pulse import QiPulse, ShapeLib
 from qiclib.code.qi_seq_instructions import SeqTrigger
+from qiclib.code.qi_types import QiType
+from qiclib.code.qi_var_definitions import _QiVariableBase
 
 
 def test_no_length_inside_job():
     with QiJob():
         q = QiCells(1)
-        assert isinstance(q[0]["nothing here"], QiCellProperty)
+        assert isinstance(q[0]["nothing here"], qicode.QiCellProperty)
 
 
 class TestQiSampleCell:
@@ -204,7 +208,8 @@ class TestQiSampleCell:
 
     def test_import_qi_cells_error(self):
         with pytest.raises(
-            ValueError, match="Imported JSON string does not contain 'cells'."
+            ValueError,
+            match=re.escape("Imported JSON string does not contain 'cells'."),
         ):
             QiSample.loads(
                 '{"electrical_delay": 0.0, "recording_length": 4e-07, "pi_pulse": 4.2e-08}'
@@ -219,105 +224,113 @@ class TestQiCommand:
 
     @pytest.fixture
     def cell(self, job):
-        cell = QiCell(42)
+        cells = QiCells(1)
+        cell = cells[0]
         cell["electrical_delay"] = 0
         cell["recording_length"] = 400e-9
         return cell
 
-    def test_recording_length(self, cell):
-        rec = RecordingCommand(
-            cell,
-            "result",
-            None,
-            length=cell["recording_length"],
-            offset=cell["electrical_delay"],
-        )
+    @pytest.fixture
+    def sample(self):
+        sample = QiSample(1)
+        sample[0]["electrical_delay"] = 0
+        sample[0]["recording_length"] = 400e-9
+        return sample
 
-        assert cell["recording_length"] == rec.length
-
-    def test_recording_error(self, cell):
-        # Raises error: RecordingCommand needs state variable
-        var = QiTimeVariable()
-        with pytest.raises(TypeError):
-            _rec = RecordingCommand(
-                cell,
-                None,
-                var,
-                length=cell["recording_length"],
-                offset=cell["electrical_delay"],
+    def test_recording_length(self):
+        with QiJob() as job:
+            q = QiCells(1)
+            Recording(
+                q[0],
+                duration=400e-9,
+                offset=0,
+                save_to="result",
             )
+        assert isinstance(job.commands[0], RecordingCommand)
+        assert job.commands[0].length == 400e-9
 
-    def test_recording_state(self, cell):
-        var = QiStateVariable()
+    def test_recording_error(self):
+        # Raises error: RecordingCommand needs state variable
+        with pytest.raises(TypeError):
+            with QiJob():
+                q = QiCells(1)
+                var = QiTimeVariable()
+                Recording(
+                    q[0],
+                    duration=q[0]["recording_length"],
+                    offset=q[0]["electrical_delay"],
+                    save_to="result",
+                    state_to=var,
+                )
 
-        rec = RecordingCommand(
-            cell,
-            None,
-            var,
-            length=cell["recording_length"],
-            offset=cell["electrical_delay"],
-        )
+    def test_recording_state(self):
+        with QiJob() as job:
+            q = QiCells(1)
+            var = QiStateVariable()
+            Recording(
+                q[0],
+                duration=q[0]["recording_length"],
+                offset=q[0]["electrical_delay"],
+                state_to=var,
+            )
+            # Test also with additional QiResult supplied
+            Recording(
+                q[0],
+                duration=q[0]["recording_length"],
+                offset=q[0]["electrical_delay"],
+                state_to=var,
+                save_to="result",
+            )
+        # Command 1 is declare command
 
-        assert rec.uses_state
+        rec1 = job.commands[1]
+        assert isinstance(rec1, RecordingCommand)
+        assert rec1.uses_state
 
-        # Test also with additional QiResult supplied
-        rec = RecordingCommand(
-            cell,
-            "result",
-            var,
-            length=cell["recording_length"],
-            offset=cell["electrical_delay"],
-        )
+        rec2 = job.commands[2]
+        assert isinstance(rec2, RecordingCommand)
+        assert rec2.uses_state
 
-        assert rec.uses_state
+    def test_assign_error(self):
+        with pytest.raises(TypeError):
+            with QiJob():
+                var = QiStateVariable()
+                Assign(var, 1)
 
-    def test_assign_error(self, job):
-        # Raises error: Cannot assign to state variable
-        var = QiStateVariable()
-        with pytest.raises(
-            TypeError,
-        ):
-            Assign(var, 1)
-
-        with pytest.raises(
-            TypeError, match="Target of Assign can only be a QiVariable."
-        ):
-            Assign(1, 1)
-
-        with pytest.raises(
-            TypeError, match="Target of Assign can only be a QiVariable."
-        ):
-            q = QiCell(31)
-            Assign(q, 1)
-
-    def test_ForRange_end_value_warning(self, job, cell):
-        # Warns that end value 0 is not included
-        var = QiTimeVariable()
-        with ForRange(var, 20e-9, 0, -4e-9):
-            Wait(cell, var)
-
+    def test_ForRange_end_value_warning(self):
         with pytest.warns(
             UserWarning, match="End value of 0 will not be included in ForRange."
         ):
-            job.__exit__(None, None, None)
+            with QiJob():
+                q = QiCells(1)
+                # Warns that end value 0 is not included
+                var = QiTimeVariable()
+                with ForRange(var, 20e-9, 0, -4e-9):
+                    Wait(q[0], var)
 
-    def test_ForRange_var_start_end_warning(self, cell):
+    def test_ForRange_var_start_end_warning(self):
         # Warns that unrolling is not supported for variable start/end times
-        var = QiTimeVariable()
-        var2 = QiTimeVariable()
         with pytest.raises(
             RuntimeError,
             match="Loop variable can not be used as start value",
         ):
-            with ForRange(var, var, var2, -4e-9):
-                Wait(cell, var)
+            with QiJob():
+                q = QiCells(1)
+                var = QiTimeVariable()
+                var2 = QiTimeVariable()
+                with ForRange(var, var, var2, -4e-9):
+                    Wait(q[0], var)
 
         with pytest.raises(
             RuntimeError,
             match="Loop variable can not be used as end value",
         ):
-            with ForRange(var, var2, var, -4e-9):
-                Wait(cell, var)
+            with QiJob():
+                q = QiCells(1)
+                var = QiTimeVariable()
+                var2 = QiTimeVariable()
+                with ForRange(var, var2, var, -4e-9):
+                    Wait(q[0], var)
 
     def test_ForRange_error(self):
         with (
@@ -337,28 +350,35 @@ class TestQiCommand:
                 with ForRange(var, 20e-9, 0, -3e-9):
                     Wait(cells[0], var)
 
-    def test_ForRange_state_error(self, cell):
+    def test_ForRange_state_error(self):
         # Raises error: step must be multiple of 4e-9
-        var = QiStateVariable()
         with pytest.raises(TypeError):
-            with ForRange(var, 20e-9, 0, -4e-9):
-                Wait(cell, var)
+            with QiJob():
+                q = QiCells(1)
+                var = QiStateVariable()
+                with pytest.raises(TypeError):
+                    with ForRange(var, 20e-9, 0, -4e-9):
+                        Wait(q[0], var)
 
-    def test_ForRange_Parallel_var_warning(self, cell):
+    def test_ForRange_Parallel_var_warning(self):
         # Raises error: step must be multiple of 4e-9
-        var = QiTimeVariable()
         warning_msg = r"Loop variable inside Parallel Context Manager might result in unexpected behaviour\. Please unroll loop or change variable"
         with pytest.raises(RuntimeError, match=warning_msg):
-            with ForRange(var, 52e-9, 0, -4e-9):
-                with Parallel():
-                    Play(cell, QiPulse(42e-9))
-                with Parallel():
-                    Wait(cell, var)
+            with QiJob():
+                var = QiTimeVariable()
+                q = QiCells(1)
+                with ForRange(var, 52e-9, 0, -4e-9):
+                    with Parallel():
+                        Play(q[0], QiPulse(42e-9))
+                    with Parallel():
+                        Wait(q[0], var)
 
-    def test_ForRange_OK(self, cell):
-        var = QiTimeVariable()
-        with ForRange(var, 0, 100e-9, 24e-9):
-            Wait(cell, var)
+    def test_ForRange_OK(self):
+        with QiJob():
+            q = QiCells(1)
+            var = QiTimeVariable()
+            with ForRange(var, 0, 100e-9, 24e-9):
+                Wait(q[0], var)
 
     def test_ForRange_negative_OK(self):
         with pytest.warns(
@@ -370,16 +390,16 @@ class TestQiCommand:
                 with ForRange(var, 100e-9, 0, -20e-9):
                     Wait(cells[0], var)
 
-    def test_for_range_definition_error(self, job):
-        var = QiVariable(int)
+    def test_for_range_definition_error(self):
+        var = _QiVariableBase(QiType.NORMAL)
         with pytest.raises(ValueError):
-            ForRange(var, 0, 5, -1)
+            ForRangeCommand(var, 0, 5, -1, [])
 
         with pytest.raises(ValueError):
-            ForRange(var, 5, 0, 1)
+            ForRangeCommand(var, 5, 0, 1, [])
 
         with pytest.raises(ValueError):
-            ForRange(var, 0, 5, 0)
+            ForRangeCommand(var, 0, 5, 0, [])
 
 
 class TestQiJobDescription:
@@ -404,13 +424,15 @@ class TestQiJobDescription:
         assert cmd.value.value == util.conv_time_to_cycles(value)
 
     def test_if_else_OK(self):
-        with QiJob():
+        with QiJob() as job:
             var1 = QiVariable(int)
-            with If(var1 > 3) as if_cm:
+            with If(var1 > 3):
                 Assign(var1, 0)
             with Else():
                 Assign(var1, 0)
 
+        if_cm = next(filter(lambda cmd: isinstance(cmd, IfCommand), job.commands))
+        assert isinstance(if_cm, IfCommand)
         assert len(if_cm._else_body) == 1
         assert if_cm.is_followed_by_else()
 
@@ -437,7 +459,8 @@ class TestQiJobDescription:
 
     def test_multiple_qicells_calls_Error(self):
         with pytest.raises(
-            RuntimeError, match="Can only register one set of cells at a QiJob."
+            RuntimeError,
+            match=re.escape("Can only register one set of cells at a QiJob."),
         ):
             with QiJob():
                 _q = QiCells(1)
@@ -446,14 +469,6 @@ class TestQiJobDescription:
     def test_qicells_in_multiple_jobs_Error(self):
         with QiJob():
             q = QiCells(1)
-            q[0]["test"] = 100e-9
-
-        with pytest.raises(
-            RuntimeError,
-            match="Tried setting values for cells registered to other QiJob",
-        ):
-            with QiJob():
-                q[0]["test"] = 200e-9
 
         with pytest.raises(
             RuntimeError,
@@ -462,23 +477,12 @@ class TestQiJobDescription:
             with QiJob():
                 _length = q[0]["test"]
 
-    def test_different_qi_cell_values_no_overwrite(self):
-        with QiJob() as test1:
-            q = QiCells(1)
-            q[0]["test"] = 100e-9
-
-        with QiJob() as test2:
-            q = QiCells(1)
-            q[0]["test"] = 200e-9
-
-        assert test1.cells[0]._properties.get("test") == 100e-9
-        assert test2.cells[0]._properties.get("test") == 200e-9
-
     def test_single_recording_box_retrieval(self):
         with QiJob() as rec_job:
             q = QiCells(1)
             Recording(q[0], 4e-9, save_to="data0")
-            q[0]._result_container["data0"].data = [42]
+
+        rec_job.cells[0]._result_container["data0"].data = [42]
 
         result = rec_job.cells[0].data()  # returns dict of all data boxes
 
@@ -501,7 +505,8 @@ class TestQiJobDescription:
         with QiJob() as rec_job:
             q = QiCells(1)
             Recording(q[0], 4e-9, save_to="data0")
-            q[0]._result_container["data0"].data = [42]
+
+        rec_job.cells[0]._result_container["data0"].data = [42]
 
         result = rec_job.cells[0].data()  # returns list of all data boxes
 
@@ -553,7 +558,8 @@ class TestQiJobDescription:
 
     def test_Parallel_Type_Error(self):
         with pytest.raises(
-            RuntimeError, match="Type IfCommand not allowed inside Parallel()"
+            RuntimeError,
+            match=re.escape("Type IfCommand not allowed inside Parallel()"),
         ):
             with QiJob():
                 var1 = QiVariable(int)
@@ -563,7 +569,8 @@ class TestQiJobDescription:
 
     def test_Parallel_state_recording_Error(self):
         with pytest.raises(
-            RuntimeError, match="Can not save to state variable inside Parallel"
+            RuntimeError,
+            match=re.escape("Can not save to state variable inside Parallel"),
         ):
             with QiJob():
                 q = QiCells(2)
@@ -635,23 +642,23 @@ class TestQiJobDescription:
             Play(q[0], QiPulse(length=48e-9))
 
         with pytest.raises(
-            RuntimeError, match="Can not use command outside QiJob context manager."
+            RuntimeError, match=re.escape("Can not use command outside QiJob context.")
         ):
             Wait(q[0], 20e-9)
 
     def test_variable_outside_job_error(self):
         with pytest.raises(
-            RuntimeError, match="Can not use command outside QiJob context manager."
+            RuntimeError, match=re.escape("Can not use command outside QiJob context.")
         ):
             _var = QiVariable(int)
 
         with pytest.raises(
-            RuntimeError, match="Can not use command outside QiJob context manager."
+            RuntimeError, match=re.escape("Can not use command outside QiJob context.")
         ):
             _var = QiTimeVariable(42e-9)
 
         with pytest.raises(
-            RuntimeError, match="Can not use command outside QiJob context manager."
+            RuntimeError, match=re.escape("Can not use command outside QiJob context.")
         ):
             _var = QiStateVariable()
 
@@ -676,9 +683,8 @@ class TestQiJobDescription:
         with QiJob() as str_job:
             q = QiCells(1)
             length = QiVariable()
-            storage = QiResult()
             Assign(length, 1e-07)
-            Store(q[0], length, storage)
+            Store(q[0], length, "result")
             RotateFrame(q[0], 90)
             Sync(q[0])
 
@@ -706,7 +712,7 @@ QiJob:
     q = QiCells(1)
     v0 =  QiVariable()
     Assign(v0, 1e-07)
-    Store(q[0], v0, QiResult(""))
+    Store(q[0], v0, QiResult("result"))
     RotateFrame(q[0], 90)
     Sync(q[0])
     If(v0 > (2 + (v0 * 5))):
@@ -804,7 +810,7 @@ QiJob:
     def test_stringify_shapes(self):
         with QiJob() as job:
             q = QiCells(1)
-            pulse = QiPulse(10e-6, ShapeLib.gauss)
+            pulse = QiPulse(10e-6, shape=ShapeLib.gauss)
             Play(q[0], pulse)
         string = str(job)
         assert (
@@ -887,7 +893,9 @@ class TestQiJobDescriptionMissingProperty:
         test = QiSample(1)
         with pytest.raises(
             RuntimeError,
-            match="Not all properties for job could be resolved. Missing properties:",
+            match=re.escape(
+                "Not all properties for job could be resolved. Missing properties:"
+            ),
         ):
             job._build_program(test)
 
@@ -904,39 +912,45 @@ class TestQiJobDescriptionMissingProperty:
 
         with pytest.raises(
             RuntimeError,
-            match="Not all properties for job could be resolved. Missing properties:",
+            match=re.escape(
+                "Not all properties for job could be resolved. Missing properties:"
+            ),
         ):
             job._build_program(test)
 
 
+@staticmethod
+@QiGate
+def PlayPulse(length, cell: QiCell):
+    Play(cell, QiPulse(length))
+
+
+@staticmethod
+@QiGate
+def PlayPulses(length, cell1: QiCell, cell2: QiCell):
+    Play(cell1, QiPulse(length))
+    Play(cell2, QiPulse(length))
+
+
+@staticmethod
+@QiGate
+def Readout(cell):
+    pulse_length = cell["readout"]
+    PlayReadout(cell, QiPulse(pulse_length))
+    Recording(cell, 100e-9)
+
+
+@staticmethod
+@QiGate
+def AssignVar(var):
+    Assign(var, 42)
+
+
 class TestQiGate:
-    @staticmethod
-    @QiGate
-    def PlayPulse(length, cell: QiCell):
-        Play(cell, QiPulse(length))
-
-    @staticmethod
-    @QiGate
-    def PlayPulses(length, cell1: QiCell, cell2: QiCell):
-        Play(cell1, QiPulse(length))
-        Play(cell2, QiPulse(length))
-
-    @staticmethod
-    @QiGate
-    def Readout(cell):
-        pulse_length = cell["readout"]
-        PlayReadout(cell, QiPulse(pulse_length))
-        Recording(cell, 100e-9)
-
-    @staticmethod
-    @QiGate
-    def AssignVar(var):
-        Assign(var, 42)
-
     def test_single_cell_function(self):
         with QiJob(skip_nco_sync=True) as gate_test:
             _q = QiCells(2)
-            self.PlayPulse(48e-9, gate_test.cells[0])
+            PlayPulse(48e-9, gate_test.cells[0])
 
         assert len(gate_test.commands) == 1
         assert isinstance(gate_test.commands[0], PlayCommand)
@@ -944,7 +958,7 @@ class TestQiGate:
     def test_multi_cell_function(self):
         with QiJob(skip_nco_sync=True) as gate_test:
             _q = QiCells(2)
-            self.PlayPulses(48e-9, gate_test.cells[0], gate_test.cells[1])
+            PlayPulses(48e-9, gate_test.cells[0], gate_test.cells[1])
 
         assert len(gate_test.commands) == 3
 
@@ -960,7 +974,7 @@ class TestQiGate:
     def test_gate_cell_getitem_function(self):
         with QiJob(skip_nco_sync=True) as gate_test:
             _q = QiCells(2)
-            self.Readout(gate_test.cells[0])
+            Readout(gate_test.cells[0])
 
         assert len(gate_test.commands) == 1
         assert isinstance(gate_test.commands[0], PlayReadoutCommand)
@@ -969,7 +983,7 @@ class TestQiGate:
         with pytest.raises(RuntimeError):
             with QiJob(skip_nco_sync=True):
                 variable = QiVariable(int)
-                self.AssignVar(variable)
+                AssignVar(variable)
 
 
 class TestPulseToCell:
@@ -1056,10 +1070,10 @@ class TestPulseToCell:
             q = QiCells(1)
             state = QiVariable()
             PlayReadout(q[0], QiPulse(400e-9, frequency=60e6))
-            Recording(q[0], 400e-9, 280e-9, save_to=state)
+            Recording(q[0], 400e-9, 280e-9, state_to=state)
             Wait(q[0], 2e-6)
 
-        assert state in job.commands[1]._associated_variable_set
+        assert job.get_var(state) in job.commands[1]._associated_variable_set
 
     def test_qipulse_with_qicell_property(self):
         # from issue #209
@@ -1324,7 +1338,8 @@ def test_amplitude_as_sample_ok():
 
 def test_nested_parallel_blocks():
     with pytest.raises(
-        RuntimeError, match="Type ParallelCommand not allowed inside Parallel()"
+        RuntimeError,
+        match=re.escape("Type ParallelCommand not allowed inside Parallel()"),
     ):
         with QiJob():
             q = QiCells(1)
@@ -1356,3 +1371,14 @@ def test_for_within_if():
         "j -0x4",
         "end",
     ]
+
+
+def test_variable_amplitude_can_be_used():
+    with QiJob() as job:
+        q = QiCells(2)
+        a = QiAmplitudeVariable()
+        with ForRange(a, 0, 0.99, 0.1):
+            PlayReadout(q[0], QiPulse(length="cw", frequency=200e6, amplitude=a))
+            Play(q[1], QiPulse.off())
+
+    job._build_program()

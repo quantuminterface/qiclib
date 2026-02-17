@@ -13,11 +13,12 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+import re
+
 import pytest
 
 import qiclib.code.qi_visitor as qv
-from qiclib.code.qi_command import AssignCommand
-from qiclib.code.qi_jobs import (
+from qiclib.code import (
     Assign,
     ForRange,
     If,
@@ -26,12 +27,13 @@ from qiclib.code.qi_jobs import (
     PlayReadout,
     QiCells,
     QiJob,
+    QiPulse,
     QiSample,
     QiVariable,
     Recording,
     Wait,
 )
-from qiclib.code.qi_pulse import QiPulse
+from qiclib.code.qi_command import AssignCommand, IfCommand, ParallelCommand
 
 
 class TestVariableAssignment:
@@ -60,11 +62,11 @@ class TestVariableAssignment:
 
             Assign(y_time, y * 4e-9)
 
-            with If(x > z) as if_test:
+            with If(x > z):
                 Play(q[0], QiPulse(length=y_time))
                 Wait(q[1], delay=50e-9)
 
-                with Parallel() as parallel_test:
+                with Parallel():
                     Play(q[0], QiPulse(length=30e-9))
                     PlayReadout(q[0], QiPulse(length=30e-9))
 
@@ -72,6 +74,8 @@ class TestVariableAssignment:
 
         # test if context managers recognize used cells inside their body
         self.assign_cell_to_CM(job.commands)
+        if_test = next(filter(lambda cmd: isinstance(cmd, IfCommand), job.commands))
+        assert isinstance(if_test, IfCommand)
 
         assert job.cells[0] in if_test._relevant_cells
         assert job.cells[1] in if_test._relevant_cells
@@ -79,9 +83,17 @@ class TestVariableAssignment:
         assert job.cells[2] not in if_test._relevant_cells
         assert job.cells[3] not in if_test._relevant_cells
 
+        parallel_test = next(
+            filter(lambda cmd: isinstance(cmd, ParallelCommand), if_test.body)
+        )
+        assert isinstance(parallel_test, ParallelCommand)
+
         assert job.cells[0] in parallel_test._relevant_cells
         assert job.cells[1] not in parallel_test._relevant_cells
 
+        x = job.get_var(x)
+        y = job.get_var(y)
+        z = job.get_var(z)
         assert if_test.is_variable_relevant(x)
         assert not (if_test.is_variable_relevant(y))
         assert if_test.is_variable_relevant(z)
@@ -138,6 +150,8 @@ class TestVariableAssignment:
         # Test if QiVariables are only allocated to relevant cells
         self.assign_variables_to_cell(job.commands)
 
+        v = job.get_var(v)
+
         assert p[0] in v._relevant_cells
         assert p[1] not in v._relevant_cells
         assert p[2] not in v._relevant_cells
@@ -155,7 +169,7 @@ class TestVariableAssignment:
             var1 = QiVariable(int)
             var2 = QiVariable(int)
 
-            with If(var2 == 0) as if_test:
+            with If(var2 == 0):
                 Assign(var1, 2)
             with ForRange(var2, 5, var1, -1):
                 Wait(q[0], 24e-9)
@@ -164,7 +178,11 @@ class TestVariableAssignment:
         self.assign_variables_to_cell(assign_test.commands)
         self.assign_cell_to_CM(assign_test.commands)
 
-        assert q[0] in if_test._relevant_cells
+        if_cm = next(
+            filter(lambda cmd: isinstance(cmd, IfCommand), assign_test.commands)
+        )
+        assert isinstance(if_cm, IfCommand)
+        assert q[0] in if_cm._relevant_cells
 
 
 class TestRecordingLength:
@@ -261,6 +279,8 @@ class TestRecordingLength:
 
         with pytest.raises(
             RuntimeError,
-            match="Parallel Blocks with multiple Recording instructions with different offsets are not supported.",
+            match=re.escape(
+                r"Parallel Blocks with multiple Recording instructions with different offsets are not supported."
+            ),
         ):
             rec_test._run_analyses()

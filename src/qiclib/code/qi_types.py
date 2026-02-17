@@ -23,11 +23,11 @@ The basic typechecking idea is described in the documentation for `_TypeConstrai
 from __future__ import annotations
 
 import warnings
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from abc import abstractmethod
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeAlias
 
+import qicode
 from qiclib.packages.constants import CONTROLLER_CYCLE_TIME
 
 from .qi_visitor import QiJobVisitor
@@ -44,147 +44,7 @@ if TYPE_CHECKING:
     )
 
 
-class QiType(ABC):
-    """
-    The base class of all types.
-    """
-
-    UNKNOWN: QiType
-    TIME: QiType
-    """
-    Time values contain some amount of times (in cycles) that, for example, can be used in wait commands.
-    They are specified using float (seconds) and are converted to cycles automatically.
-    """
-    STATE: QiType
-    """
-    State values are the result of a recording.
-    """
-    NORMAL: QiType
-    """
-    Freely usable integer values.
-    """
-    FREQUENCY: QiType
-    """
-    Frequency values can be used in the Play/PlayReadout commands and, like TIME, are specified using floats.
-    """
-    PHASE: QiType
-    """
-    Phase values are specified in radians and can be used in the Play/Readout commands
-    """
-    AMPLITUDE: QiType
-    """
-    Amplitude values are specified in floating point units from 0 to 1 and can be used in the Play/PlayReadout commands
-    """
-
-    @staticmethod
-    def ARRAY(
-        element_type: QiType, shape: None | tuple[int | None, ...] = None
-    ) -> QiArrayType:
-        """
-        Arrays are compound types and can contain a fixed number of elements
-        """
-        return QiArrayType(element_type, shape)
-
-    def is_array(self) -> bool:
-        return isinstance(self, QiArrayType)
-
-    @abstractmethod
-    def is_unknown(self) -> bool:
-        pass
-
-    @abstractmethod
-    def matches(self, other: QiType) -> bool:
-        pass
-
-    @classmethod
-    def convert_from(cls, py_type) -> QiType:
-        if isinstance(py_type, QiType):
-            return py_type
-        if py_type is int:
-            return QiType.NORMAL
-        if py_type is float:
-            return QiType.TIME
-        raise RuntimeError(f"passed type {py_type} cannot be converted to a QiType")
-
-
-@dataclass(frozen=True)
-class QiScalarType(QiType):
-    """
-    Scalar types contain a single value, i.e., frequency, time, normal, ...
-    The are in contrast to compound types, such as the QiArrayType.
-    """
-
-    name: str
-
-    def __str__(self):
-        return self.name
-
-    def is_unknown(self) -> bool:
-        return False
-
-    def matches(self, other: QiType) -> bool:
-        return other == self
-
-
-class QiUnknownType(QiType):
-    def __str__(self) -> str:
-        return "UNKNOWN"
-
-    def is_unknown(self) -> bool:
-        return True
-
-    def matches(self, other: QiType) -> bool:
-        return other == self
-
-
-@dataclass(frozen=True)
-class QiArrayType(QiType):
-    """
-    Array types are a collection of homogeneous elements.
-    """
-
-    element_type: QiType
-    shape: tuple[int | None, ...] | None
-
-    def __str__(self):
-        if self.shape:
-            shape_str = "x".join(str(s) if s is not None else "?" for s in self.shape)
-            return f"Array[{self.element_type}, {shape_str}]"
-        return f"Array[{self.element_type}, ?]"
-
-    def flat_size(self):
-        if self.shape is None:
-            raise RuntimeError("shape is not resolved; cannot obtain flat size")
-        if len(self.shape) == 0:
-            raise RuntimeError("Array must be at least 1D")
-        total_size = 1
-        for element in self.shape:
-            if element is None:
-                raise RuntimeError("shape is not resolved; cannot obtain flat size")
-            total_size *= element
-        return total_size
-
-    def is_unknown(self) -> bool:
-        return self.element_type.is_unknown()
-
-    def matches(self, other: QiType) -> bool:
-        if not isinstance(other, QiArrayType):
-            return False
-        if self.shape is not None and other.shape is not None:
-            if self.shape != other.shape:
-                return False
-
-        # One shape is not defined => match purely on type.
-        return other.element_type == self.element_type
-
-
-QiType.UNKNOWN = QiUnknownType()
-QiType.TIME = QiScalarType("TIME")
-QiType.STATE = QiScalarType("STATE")
-QiType.NORMAL = QiScalarType("NORMAL")
-QiType.FREQUENCY = QiScalarType("FREQUENCY")
-QiType.PHASE = QiScalarType("PHASE")
-QiType.AMPLITUDE = QiScalarType("AMPLITUDE")
+QiType: TypeAlias = qicode.QiType
 
 
 class _TypeConstraintReason:
@@ -445,16 +305,16 @@ class _TypeInformation:
 
             for constraint in self.constraints:
                 constraint.try_apply()
-        elif isinstance(self.type, QiArrayType):
-            if not isinstance(type, QiArrayType):
+        elif (arr_type := self.type.as_array()) is not None:
+            if (other_type := type.as_array()) is None:
                 raise TypeError(
                     f"{self.expression} was of type {self.type}\n"
                     + f"(because it {self.type_reason.to_error_message()})\n"
                     + f"but is also used as type {type}\n"
                     + f"(because it {reason.to_error_message()})"
                 )
-            if self.type.element_type == QiType.UNKNOWN:
-                self.type = QiType.ARRAY(type.element_type, self.type.shape)
+            if arr_type.element_type == QiType.UNKNOWN:
+                self.type = QiType.ARRAY(other_type.element_type, arr_type.len)
                 self.type_reason = reason
 
                 for constraint in self.constraints:

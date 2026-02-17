@@ -550,6 +550,15 @@ class ProgramBuilderVisitor(QiCommandVisitor):
         if len(relevant_cells) == 1:
             return
 
+        if for_range.var.type != QiType.TIME:
+            self.sync_cells(
+                relevant_cells,
+                _ProgramCycles.SyncPoint(
+                    for_range, _ProgramCycles.SyncPointType.AFTER_FOR_RANGE_ITERATION
+                ),
+            )
+            return
+
         find_var_visitor = QiFindVarCmds(for_range.var)
         for cmd in for_range.body:
             cmd.accept(find_var_visitor)

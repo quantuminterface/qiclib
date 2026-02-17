@@ -15,7 +15,7 @@ def test_compute_custom_piecewise_linear_fit():
 
     assert fit_params is not None, "Fit parameters should not be None."
 
-    t1, t2, A1, A2 = fit_params
+    t1, t2, _, _ = fit_params
 
     assert t1 >= 0, "t1 (max_offset) should be >= 0"
     assert t1 <= 1024e-9, "t1 (max_offset) should be <= 1024 ns"

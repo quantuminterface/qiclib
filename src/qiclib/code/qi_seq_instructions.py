@@ -22,9 +22,15 @@ and how to encode the instruction into their binary format.
 from __future__ import annotations
 
 import abc
+import re
 from abc import abstractmethod
 from enum import Enum
 from typing import Generic, TypeVar
+
+try:
+    from typing import Self
+except ImportError:
+    from typing_extensions import Self
 
 from .qi_var_definitions import QiOp, QiOpCond
 
@@ -207,6 +213,82 @@ class SequencerInstruction(abc.ABC):
     def __init__(self, opc: SeqOpCode) -> None:
         self.op = opc
 
+    @classmethod
+    def from_str(cls, val: str) -> Self:
+        """
+        Parse an instruction string and return the appropriate instruction instance.
+
+        :param val:
+            String representation of the instruction
+        :return:
+            An instance of the appropriate instruction class
+        :raises ValueError: If the instruction cannot be parsed unambiguously
+        """
+        val = val.strip()
+
+        op_name = val.split(None, maxsplit=1)[0]
+
+        # Route to the appropriate parser
+        parsers = {
+            # Reg-Immediate instructions
+            "addi": SeqRegImmediateInst.from_str,
+            "sll": SeqRegImmediateInst.from_str,
+            "xori": SeqRegImmediateInst.from_str,
+            "ori": SeqRegImmediateInst.from_str,
+            "andi": SeqRegImmediateInst.from_str,
+            "sra": SeqRegImmediateInst.from_str,
+            "srl": SeqRegImmediateInst.from_str,
+            # Reg-Reg instructions
+            "add": SeqRegRegInst.from_str,
+            "sub": SeqRegRegInst.from_str,
+            "mul": SeqRegRegInst.from_str,
+            "xor": SeqRegRegInst.from_str,
+            "or": SeqRegRegInst.from_str,
+            "and": SeqRegRegInst.from_str,
+            # Branch instructions
+            "beq": SeqBranch.from_str,
+            "bne": SeqBranch.from_str,
+            "blt": SeqBranch.from_str,
+            "bge": SeqBranch.from_str,
+            "bltu": SeqBranch.from_str,
+            "bgeu": SeqBranch.from_str,
+            # Jump instruction
+            "j": SeqJump.from_str,
+            # Load upper immediate
+            "lui": SeqLoadUpperImm.from_str,
+            # Wait instructions
+            "wti": SeqWaitImm.from_str,
+            "wtr": SeqWaitRegister.from_str,
+            "twr": SeqTriggerWaitRegister.from_str,
+            # Trigger instruction
+            "tr": SeqTrigger.from_str,
+            # Sync instructions
+            "sync": SeqCellSync.from_str,
+            "end": SeqEnd.from_str,
+            # Wait qubit state
+            "wtq": SeqAwaitQubitState.from_str,
+            # Load instructions
+            "lw": SeqLoad.from_str,
+            "lh": SeqLoad.from_str,
+            "lb": SeqLoad.from_str,
+            "lhu": SeqLoad.from_str,
+            "lbu": SeqLoad.from_str,
+            # Store instructions
+            "sb": SeqStore.from_str,
+            "sh": SeqStore.from_str,
+            "sw": SeqStore.from_str,
+            "sbu": SeqStore.from_str,
+            "shu": SeqStore.from_str,
+            # Send/Receive
+            "snd": SeqCellRegSend.from_str,
+            "rcv": SeqCellRegReceive.from_str,
+        }
+
+        if op_name not in parsers:
+            raise ValueError(f"Unknown instruction: {op_name}")
+
+        return parsers[op_name](val)
+
     @staticmethod
     def is_value_in_lower_immediate(val: int) -> bool:
         """
@@ -230,7 +312,7 @@ class SequencerInstruction(abc.ABC):
         """
         Returns the actual 32-bit code RISC-V instruction from this object.
         """
-        raise NotImplementedError
+        pass
 
     @staticmethod
     def nop() -> SequencerInstruction:
@@ -728,6 +810,38 @@ class SeqRegImmediateInst(SeqITypeInst[SeqRegImmFunct3]):
 
         return f"{op_name} r{self.dst_reg}, r{self.register}, {hex(self.immediate & 0xFFF)}"
 
+    @classmethod
+    def from_str(cls, val: str) -> SeqRegImmediateInst:
+        """Parse a register-immediate instruction from its string representation."""
+        # Format: <op> r<dst>, r<src>, <imm>
+        match = re.match(r"(\w+)\s+r(\d+),\s*r(\d+),\s*(0x[0-9a-fA-F]+|-?\d+)", val)
+        if not match:
+            raise ValueError(f"Cannot parse register-immediate instruction: {val}")
+
+        op_name, dst_str, src_str, imm_str = match.groups()
+        op_name = op_name.lower()
+
+        # Map op name to QiOp
+        op_map = {
+            "addi": QiOp.PLUS,
+            "sll": QiOp.LSH,
+            "xori": QiOp.XOR,
+            "ori": QiOp.OR,
+            "andi": QiOp.AND,
+            "sra": QiOp.RSH,
+            "srl": QiOp.RSH,
+        }
+
+        if op_name not in op_map:
+            raise ValueError(f"Unknown register-immediate operation: {op_name}")
+
+        operator = op_map[op_name]
+        dst_reg = int(dst_str)
+        src_reg = int(src_str)
+        immediate = int(imm_str, 0)  # 0 base auto-detects hex/decimal
+
+        return cls(operator, dst_reg, src_reg, immediate)
+
 
 class SeqCellRegSend(SeqSTypeInst):
     def __init__(
@@ -739,6 +853,10 @@ class SeqCellRegSend(SeqSTypeInst):
             funct3 = SeqRegSendFunct3.Multi
 
         super().__init__(SeqOpCode.REG_SEND, funct3, send_reg, sync_reg, sync_cell)
+
+    @classmethod
+    def from_str(cls, val: str) -> SeqCellRegSend:
+        raise NotImplementedError(cls.__name__)
 
 
 class SeqCellRegReceive(SeqUTypeInst):
@@ -755,11 +873,14 @@ class SeqCellRegReceive(SeqUTypeInst):
             immediate |= 1 << x
         immediate <<= 16
         immediate |= sender_cell << 12
-        sync_cells.clear()
         super().__init__(SeqOpCode.REG_RECEIVE, dst_reg, immediate)
 
     def __str__(self):
         return f"rcv r{self.dst_reg}, {self.immediate}"
+
+    @classmethod
+    def from_str(cls, val: str) -> SeqCellRegReceive:
+        raise NotImplementedError(cls.__name__)
 
 
 class SeqRegRegInst(SeqRTypeInst):
@@ -802,6 +923,41 @@ class SeqRegRegInst(SeqRTypeInst):
             )
         return f"{op_name} r{self.dst_reg}, r{self.reg1}, r{self.reg2}"
 
+    @classmethod
+    def from_str(cls, val: str) -> SeqRegRegInst:
+        """Parse a register-register instruction from its string representation."""
+        # Format: <op> r<dst>, r<reg1>, r<reg2>
+        match = re.match(r"(\w+)\s+r(\d+),\s*r(\d+),\s*r(\d+)", val)
+        if not match:
+            raise ValueError(f"Cannot parse register-register instruction: {val}")
+
+        op_name, dst_str, reg1_str, reg2_str = match.groups()
+        op_name = op_name.lower()
+
+        # Map op name to QiOp
+        op_map = {
+            "add": QiOp.PLUS,
+            "sub": QiOp.MINUS,
+            "mul": QiOp.MULT,
+            "sll": QiOp.LSH,
+            "xor": QiOp.XOR,
+            "sra": QiOp.RSH,
+            "srl": QiOp.RSH,
+            "or": QiOp.OR,
+            "and": QiOp.AND,
+            "mulh": QiOp.MULT,
+        }
+
+        if op_name not in op_map:
+            raise ValueError(f"Unknown register-register operation: {op_name}")
+
+        operator = op_map[op_name]
+        dst_reg = int(dst_str)
+        reg1 = int(reg1_str)
+        reg2 = int(reg2_str)
+
+        return cls(operator, dst_reg, reg1, reg2)
+
 
 class SeqLoadUpperImm(SeqUTypeInst):
     """
@@ -814,13 +970,29 @@ class SeqLoadUpperImm(SeqUTypeInst):
     def __str__(self):
         return f"lui r{self.dst_reg}, {hex(self.immediate)}"
 
+    @classmethod
+    def from_str(cls, val: str) -> SeqLoadUpperImm:
+        """Parse a load upper immediate instruction from its string representation."""
+        # Format: lui r<dst>, <imm>
+        match = re.match(r"lui\s+r(\d+),\s*(0x[0-9a-fA-F]+|-?\d+)", val)
+        if not match:
+            raise ValueError(f"Cannot parse load upper immediate instruction: {val}")
+
+        dst_str, imm_str = match.groups()
+        dst_reg = int(dst_str)
+        immediate = int(imm_str, 0)
+
+        return cls(dst_reg, immediate)
+
 
 class SeqBranch(SeqBTypeInst):
     """
     Branch instructions are used to conditionally jump over a sequence of code.
     """
 
-    def __init__(self, operator, reg1: int, reg2: int, rel_jump: int = 0) -> None:
+    def __init__(
+        self, operator: QiOpCond, reg1: int, reg2: int, rel_jump: int = 0
+    ) -> None:
         op, reg1, reg2 = super().get_register_operation_tuple(operator, reg1, reg2)
         super().__init__(SeqOpCode.BRANCH, op, reg1, reg2, rel_jump)
 
@@ -837,6 +1009,39 @@ class SeqBranch(SeqBTypeInst):
             SeqBranchFunct3.BLTU: "bltu",
         }[self.funct3]
         return f"{op_name} r{self.reg1}, r{self.reg2}, {hex(self.immediate)}"
+
+    @classmethod
+    def from_str(cls, val: str) -> SeqBranch:
+        """Parse a branch instruction from its string representation."""
+        # Format: <op> r<reg1>, r<reg2>, <offset>
+        match = re.match(r"(\w+)\s+r(\d+),\s*r(\d+),\s*(0x[0-9a-fA-F]+|-?\d+)", val)
+        if not match:
+            raise ValueError(f"Cannot parse branch instruction: {val}")
+
+        op_name, reg1_str, reg2_str, offset_str = match.groups()
+        op_name = op_name.lower()
+
+        # Map op name to QiOpCond
+        op_map = {
+            "beq": QiOpCond.EQ,
+            "bne": QiOpCond.NE,
+            "blt": QiOpCond.LT,
+            "bge": QiOpCond.GE,
+            "bltu": QiOpCond.LT,
+            "bgeu": QiOpCond.GE,
+        }
+
+        if op_name not in op_map:
+            raise ValueError(f"Unknown branch operation: {op_name}")
+
+        operator = op_map[op_name]
+        reg1 = int(reg1_str)
+        reg2 = int(reg2_str)
+        offset = int(offset_str, 0)
+
+        inst = cls(operator, reg1, reg2)
+        inst.set_jump_value(offset)
+        return inst
 
 
 class SeqJump(SequencerInstruction):
@@ -875,6 +1080,19 @@ class SeqJump(SequencerInstruction):
     def __str__(self) -> str:
         return f"j {hex(self.jump_val)}"
 
+    @classmethod
+    def from_str(cls, val: str) -> SeqJump:
+        """Parse a jump instruction from its string representation."""
+        # Format: j <offset>
+        match = re.match(r"j\s+(-?0x[0-9a-fA-F]+|-?\d+)", val)
+        if not match:
+            raise ValueError(f"Cannot parse jump instruction: {val}")
+
+        offset_str = match.group(1)
+        offset = int(offset_str, 0)
+
+        return cls(offset)
+
 
 class SeqWaitImm(SeqUTypeInst):
     def __init__(self, duration: int = 0) -> None:
@@ -887,15 +1105,54 @@ class SeqWaitImm(SeqUTypeInst):
     def __str__(self):
         return f"wti {hex(self.immediate & 0x000FFFFF)}"
 
+    @classmethod
+    def from_str(cls, val: str) -> SeqWaitImm:
+        """Parse a wait immediate instruction from its string representation."""
+        # Format: wti <duration>
+        match = re.match(r"wti\s+(0x[0-9a-fA-F]+|-?\d+)", val)
+        if not match:
+            raise ValueError(f"Cannot parse wait immediate instruction: {val}")
+
+        duration_str = match.group(1)
+        duration = int(duration_str, 0)
+
+        return cls(duration)
+
 
 class SeqWaitRegister(SeqUTypeInst):
     def __init__(self, reg: int) -> None:
         super().__init__(opc=SeqOpCode.WAIT_REG, dst_reg=reg)
 
+    @classmethod
+    def from_str(cls, val: str) -> SeqWaitRegister:
+        """Parse a wait register instruction from its string representation."""
+        # Format: wtr r<reg>, <imm>
+        match = re.match(r"wtr\s+r(\d+),", val)
+        if not match:
+            raise ValueError(f"Cannot parse wait register instruction: {val}")
+
+        reg_str = match.group(1)
+        reg = int(reg_str)
+
+        return cls(reg)
+
 
 class SeqTriggerWaitRegister(SeqUTypeInst):
     def __init__(self, reg: int) -> None:
         super().__init__(opc=SeqOpCode.TRIG_WAIT_REG, dst_reg=reg)
+
+    @classmethod
+    def from_str(cls, val: str) -> SeqTriggerWaitRegister:
+        """Parse a trigger wait register instruction from its string representation."""
+        # Format: twr r<reg>, <imm>
+        match = re.match(r"twr\s+r(\d+),", val)
+        if not match:
+            raise ValueError(f"Cannot parse trigger wait register instruction: {val}")
+
+        reg_str = match.group(1)
+        reg = int(reg_str)
+
+        return cls(reg)
 
 
 class SeqTrigger(SeqUTypeInst):
@@ -926,6 +1183,23 @@ class SeqTrigger(SeqUTypeInst):
     def __str__(self) -> str:
         return "tr " + ", ".join(map(hex, self._trig_indices))
 
+    @classmethod
+    def from_str(cls, val: str) -> SeqTrigger:
+        """Parse a trigger instruction from its string representation."""
+        # Format: tr <0x...>, <0x...>, <0x...>, <0x...>, <0x...>, <0x...>
+        match = re.match(
+            r"tr\s+(0x[0-9a-fA-F]+|-?\d+),\s*(0x[0-9a-fA-F]+|-?\d+),\s*"
+            r"(0x[0-9a-fA-F]+|-?\d+),\s*(0x[0-9a-fA-F]+|-?\d+),\s*"
+            r"(0x[0-9a-fA-F]+|-?\d+),\s*(0x[0-9a-fA-F]+|-?\d+)",
+            val,
+        )
+        if not match:
+            raise ValueError(f"Cannot parse trigger instruction: {val}")
+
+        modules = [int(m, 0) for m in match.groups()]
+        # SeqTrigger signature: (module0, module1, module2, module3, module4, module5, sync=False, reset=False)
+        return cls(*modules, sync=False, reset=False)
+
 
 class SeqCellSync(SeqUTypeInst):
     def __init__(self, cells: list):
@@ -938,10 +1212,42 @@ class SeqCellSync(SeqUTypeInst):
         immediate <<= 16
         super().__init__(opc=SeqOpCode.CELL_SYNC, immediate=immediate)
 
+    @classmethod
+    def from_str(cls, val: str) -> SeqCellSync:
+        """Parse a cell sync instruction from its string representation."""
+        # Format: sync r<dst>, <imm>
+        match = re.match(r"sync\s+r(\d+),\s*(0x[0-9a-fA-F]+|-?\d+)", val)
+        if not match:
+            raise ValueError(f"Cannot parse cell sync instruction: {val}")
+
+        # Extract cells from the immediate value
+        imm_str = match.group(2)
+        immediate = int(imm_str, 0)
+
+        # The immediate is stored with cells shifted left 16 bits
+        cell_bits = immediate >> 16
+        cells = []
+        for i in range(32):
+            if cell_bits & (1 << i):
+                cells.append(i)
+
+        if not cells or len(cells) < 2:
+            raise ValueError(f"Invalid cell sync instruction: {val}")
+
+        return cls(cells)
+
 
 class SeqEnd(SeqSTypeInst):
     def __init__(self) -> None:
         super().__init__(SeqOpCode.SYNCH, SeqExtSynchFunct3.START, 0, 0, 0)
+
+    @classmethod
+    def from_str(cls, val: str) -> SeqEnd:
+        """Parse an end instruction from its string representation."""
+        # Format: end
+        if not re.match(r"end\s*$", val):
+            raise ValueError(f"Cannot parse end instruction: {val}")
+        return cls()
 
 
 class SeqAwaitQubitState(SeqITypeInst[SeqExtSynchFunct3]):
@@ -961,6 +1267,20 @@ class SeqAwaitQubitState(SeqITypeInst[SeqExtSynchFunct3]):
 
     def __str__(self):
         return f"wtq r{self.dst_reg}, {self.immediate}"
+
+    @classmethod
+    def from_str(cls, val: str) -> SeqAwaitQubitState:
+        """Parse a wait qubit state instruction from its string representation."""
+        # Format: wtq r<dst>, <cell>
+        match = re.match(r"wtq\s+r(\d+),\s*(\d+|-?0x[0-9a-fA-F]+)", val)
+        if not match:
+            raise ValueError(f"Cannot parse wait qubit state instruction: {val}")
+
+        dst_str, cell_str = match.groups()
+        dst = int(dst_str)
+        cell = int(cell_str, 0)
+
+        return cls(cell, dst)
 
 
 class SeqStore(SeqSTypeInst):
@@ -993,6 +1313,25 @@ class SeqStore(SeqSTypeInst):
     @property
     def src_reg(self):
         return self.reg2
+
+    @classmethod
+    def from_str(cls, val: str) -> SeqStore:
+        """Parse a store instruction from its string representation."""
+        # Format: <op> r<src>, <offset>(r<base>)
+        match = re.match(
+            r"(sb|sh|sw|sbu|shu)\s+r(\d+),\s*(-?\d+|-?0x[0-9a-fA-F]+)\(r(\d+)\)", val
+        )
+        if not match:
+            raise ValueError(f"Cannot parse store instruction: {val}")
+
+        op_name, src_str, offset_str, base_str = match.groups()
+        if op_name != "sw":
+            raise NotImplementedError("Only store word implemented")
+        src = int(src_str)
+        offset = int(offset_str, 0)
+        base = int(base_str)
+
+        return cls(src, base, offset)
 
 
 class SeqLoad(SeqITypeInst[SeqMemFunct3]):
@@ -1084,3 +1423,20 @@ class SeqLoad(SeqITypeInst[SeqMemFunct3]):
         }[self.funct3]
 
         return f"{op_name} r{self.dst_reg}, {self.immediate}(r{self.base_reg})"
+
+    @classmethod
+    def from_str(cls, val: str) -> SeqLoad:
+        """Parse a load instruction from its string representation."""
+        # Format: <op> r<dst>, <offset>(r<base>)
+        match = re.match(
+            r"(lw|lh|lb|lhu|lbu)\s+r(\d+),\s*(-?\d+|-?0x[0-9a-fA-F]+)\(r(\d+)\)", val
+        )
+        if not match:
+            raise ValueError(f"Cannot parse load instruction: {val}")
+
+        _, dst_str, offset_str, base_str = match.groups()
+        dst = int(dst_str)
+        offset = int(offset_str, 0)
+        base = int(base_str)
+
+        return cls(dst, base, offset)

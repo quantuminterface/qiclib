@@ -1,0 +1,7 @@
+edition = "2023";
+
+package qicode.proto;
+
+message Variable {
+    uint32 id = 1;
+}

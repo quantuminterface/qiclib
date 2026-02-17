@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling", "hatch-build-scripts", "grpcio-tools==1.73.1"]
+build-backend = "hatchling.build"
+
+[project]
+name = "qicode"
+version = "0.0.1"
+description = "Language to program Quantum Interface's QiController"
+readme = "README.md"
+authors = [
+    { name = "Quantum Interface", email = "quantuminterface@ipe.kit.edu" },
+]
+requires-python = ">= 3.10"
+dependencies = ["protobuf>=6.31.1"]
+license = "GPL-3.0-or-later"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Operating System :: OS Independent",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+]
+
+[project.urls]
+Repository = "https://github.com/quantuminterface/qiclib"
+
+[tool.mypy]
+python_version = "3.10"
+no_implicit_optional = true

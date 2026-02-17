@@ -1,6 +1,7 @@
 exclude = [
     "src/qiclib/packages/grpc/ipe_servicehub_protos",
     "src/qiclib/_version.py",
+    "conanfile.py"
 ]
 
 [format]

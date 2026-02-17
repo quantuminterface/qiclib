@@ -1,0 +1,11 @@
+edition = "2023";
+
+package qicode.proto;
+
+message Cell {
+    uint32 index = 1;
+}
+
+message Coupler {
+    uint32 index = 1;
+}

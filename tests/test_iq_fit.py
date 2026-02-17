@@ -66,7 +66,7 @@ def test_fit_2d_distribution():
     i_values, q_values = dist[:, 0], dist[:, 1]
     fit = IQFit(IQData(i_values, q_values), bins=50)
     popt, _, _ = fit.get_blobs(order=1, plot=False)
-    _, x, y, sx, sy, theta = popt[0]
+    _, x, y, sx, sy, _ = popt[0]
     assert x == pytest.approx(-100, abs=1)
     assert y == pytest.approx(80, abs=1)
     assert sx * sx == pytest.approx(45, abs=1)

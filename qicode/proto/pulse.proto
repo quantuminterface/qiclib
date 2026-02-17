@@ -1,0 +1,36 @@
+edition = "2023";
+
+package qicode.proto;
+
+import "qicode/proto/expression.proto";
+
+message DiscretePulse {
+    Expression length = 1;
+    Expression amplitude = 2;
+    Expression phase = 3;
+    Expression frequency = 4;
+    Shape shape = 5;
+    bool hold = 6;
+    bool shiftPhase = 7;
+}
+
+message ContinuousPulse {
+    Expression amplitude = 1;
+    Expression phase = 2;
+    Expression frequency = 3;
+    Shape shape = 4;
+}
+
+message OffPulse {}
+
+message Pulse {
+    oneof kind {
+        DiscretePulse discrete = 1;
+        ContinuousPulse continuous = 2;
+        OffPulse off = 3;
+    }
+}
+
+message Shape {
+    uint32 id = 1;
+}

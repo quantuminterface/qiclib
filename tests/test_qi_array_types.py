@@ -5,23 +5,9 @@ from qiclib.code import *
 from qiclib.code.qi_types import QiType
 
 
-def test_stringify_qi_array():
-    qi_array = QiType.ARRAY(QiType.NORMAL)
-    assert str(qi_array) == "Array[NORMAL, ?]"
-
-    qi_array = QiType.ARRAY(QiType.NORMAL, (10,))
-    assert str(qi_array) == "Array[NORMAL, 10]"
-
-    qi_array = QiType.ARRAY(QiType.NORMAL, (10, 20))
-    assert str(qi_array) == "Array[NORMAL, 10x20]"
-
-    qi_array = QiType.ARRAY(QiType.NORMAL, (10, None))
-    assert str(qi_array) == "Array[NORMAL, 10x?]"
-
-
 def test_qi_array_can_be_declared():
     with QiJob() as job:
-        _v = QiVariable(type=QiType.ARRAY(element_type=QiType.NORMAL, shape=(10,)))
+        _v = QiVariable(type=QiType.ARRAY(element_type=QiType.NORMAL, length=10))
         _v[0]
 
     # Should compile
@@ -30,7 +16,7 @@ def test_qi_array_can_be_declared():
 
 def test_assigning_element_of_array_to_variable():
     with QiJob() as job:
-        v = QiVariable(type=QiType.ARRAY(element_type=QiType.NORMAL, shape=(10,)))
+        v = QiVariable(type=QiType.ARRAY(element_type=QiType.NORMAL, length=10))
         u = QiVariable(type=QiType.NORMAL)
         Assign(u, v[0])
 
@@ -39,20 +25,20 @@ def test_assigning_element_of_array_to_variable():
 
 
 def test_array_index_must_be_normal():
-    with QiJob():
-        v = QiVariable(type=QiType.ARRAY(element_type=QiType.NORMAL, shape=(10,)))
-        index = QiVariable(type=QiType.FREQUENCY, name="index")
-        with pytest.raises(
-            TypeError,
-        ):
-            v[index]
+    with pytest.raises(
+        TypeError,
+    ):
+        with QiJob():
+            v = QiVariable(type=QiType.ARRAY(element_type=QiType.NORMAL, length=10))
+            index = QiVariable(type=QiType.FREQUENCY, name="index")
+            Assign(QiVariable(), v[index])
 
 
 def test_qi_array_in_for_loop():
     with QiJob() as job:
         q = QiCells(1)
         f = QiVariable(
-            type=QiType.ARRAY(element_type=QiType.FREQUENCY, shape=(10,)), name="f"
+            type=QiType.ARRAY(element_type=QiType.FREQUENCY, length=10), name="f"
         )
         i = QiIntVariable(0, name="i")
         with ForRange(i, 0, 10):
@@ -86,7 +72,7 @@ def test_qi_array_initial_values():
     with QiJob() as job:
         q = QiCells(1)
         f = QiVariable(
-            type=QiType.ARRAY(element_type=QiType.FREQUENCY, shape=(10,)),
+            type=QiType.ARRAY(element_type=QiType.FREQUENCY, length=10),
             value=[10e6, 20e6, 30e6, 40e6, 50e6, 60e6, 70e6, 80e6, 90e6, 100e6],
             name="f",
         )
@@ -121,7 +107,7 @@ def test_qi_array_type_inference():
             Play(q[0], QiPulse(length=100e-9, frequency=f[i]))
 
     job._build_program()
-    assert f.type == QiType.ARRAY(element_type=QiType.FREQUENCY, shape=(2,))
+    assert job.get_var(f).type == QiType.ARRAY(element_type=QiType.FREQUENCY, length=2)
 
     with QiJob() as job:
         q = QiCells(1)
@@ -134,7 +120,7 @@ def test_qi_array_type_inference():
             Play(q[0], QiPulse(length=t[i]))
 
     job._build_program()
-    assert t.type == QiType.ARRAY(element_type=QiType.TIME, shape=(3,))
+    assert job.get_var(t).type == QiType.ARRAY(element_type=QiType.TIME, length=3)
 
 
 def test_compatibility_with_numpy():
@@ -150,4 +136,22 @@ def test_compatibility_with_numpy():
             Play(q[0], QiPulse(length=100e-9, frequency=f[i]))
 
     job._build_program()
-    assert f.type == QiType.ARRAY(element_type=QiType.FREQUENCY, shape=freqcs.shape)
+    assert job.get_var(f).type == QiType.ARRAY(
+        element_type=QiType.FREQUENCY, length=len(freqcs)
+    )
+
+
+def test_qi_array_with_amplitude():
+    amps = np.arange(0, 1, 0.1)
+    with QiJob() as job:
+        q = QiCells(1)
+        a_arr = QiVariable(value=amps, name="a_arr")  # get numpy array
+        i = QiIntVariable(0, name="i")  # index variable
+        n_amp = int(amps.size)  # end of index loop
+        with ForRange(i, 0, n_amp):
+            PlayReadout(q[0], QiPulse(amplitude=a_arr[i], length=200e-9))
+
+    job._build_program()
+    assert len(job.cells[0].readout_pulses) == 1
+    readout_pulse = job.cells[0].readout_pulses[0](1e9)
+    assert all(readout_pulse == 1)

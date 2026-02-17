@@ -13,18 +13,16 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-from qiclib.code.qi_jobs import (
-    QiJob,
-    QiVariable,
-)
+from qiclib.code.qi_types import QiType
+from qiclib.code.qi_var_definitions import _QiVariableBase
 
 
 def test_contained_variables():
-    with QiJob():
-        x = QiVariable(int)
-        y = QiVariable(int)
-        z = QiVariable(int)
-        a = x + y + z
+    x = _QiVariableBase(QiType.NORMAL)
+    y = _QiVariableBase(QiType.NORMAL)
+    z = _QiVariableBase(QiType.NORMAL)
+
+    a = x + y + z
 
     assert x in a.contained_variables
     assert y in a.contained_variables
