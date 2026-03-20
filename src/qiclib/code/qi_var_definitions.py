@@ -268,6 +268,12 @@ class QiExpression:
     def __ne__(self, x):
         return QiCondition(self, QiOpCond.NE, QiExpression._from(x))
 
+    def __truediv__(self, x):
+        raise NotImplementedError("Division for generic expressions")
+
+    def __rtruediv__(self, x):
+        raise NotImplementedError("Division for generic expressions")
+
     def is_dynamic(self) -> bool:
         return not isinstance(self, _QiConstValue | QiCellProperty)
 
@@ -452,6 +458,12 @@ class _QiConstValue(QiExpression):
             )
         return f"{value:g}"
 
+    def __truediv__(self, x):
+        return _QiConstValue(self._given_value / x)
+
+    def __rtruediv__(self, x):
+        return x / self._given_value
+
 
 QiConst = qicode.QiConst
 QiNormalValue = qicode.QiNormalValue
@@ -585,7 +597,9 @@ class QiCellProperty(QiExpression):
     # and are, therefore, left as they are.
 
     def __truediv__(self, x):
-        if (isinstance(x, _QiConstValue) and x._given_value == 1) or x == 1:
+        if (isinstance(x, _QiConstValue) and x._given_value == 1) or (
+            isinstance(x, int | float) and x == 1
+        ):
             return self
         old_op = self.operations
         self.operations = lambda val: old_op(val) / x

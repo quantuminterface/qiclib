@@ -33,18 +33,18 @@ from qicode.proto.commands_pb2 import (
     WaitCommand,
     WhileCommand,
 )
-from qicode.proto.compiled_job_pb2 import AssembledJob, BinaryJob, SampleablePulse
+from qicode.proto.compiled_job_pb2 import CompiledJob, Code, SampleablePulse
 from qicode.proto.job_pb2 import Job
 
 __all__ = [
     "AsmCommand",
-    "AssembledJob",
     "AssignCommand",
-    "BinaryJob",
     "CallSite",
     "Cell",
     "CellProperty",
+    "Code",
     "Command",
+    "CompiledJob",
     "ContinuousPulse",
     "Coupler",
     "DeclareCommand",

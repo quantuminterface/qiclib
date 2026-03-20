@@ -1,6 +1,6 @@
 """Test __str__ methods for all QiCode classes."""
 
-from qicode.proto.compiled_job_pb2 import AssembledJob, BinaryJob
+from qicode.proto.compiled_job_pb2 import CompiledJob as ProtoCompiledJob
 
 from qicode import (
     CompiledJob,
@@ -168,19 +168,10 @@ def test_qi_pulse_discrete():
     assert "hold=" in str(pulse)
 
 
-def test_compiled_job_binary():
-    """Test CompiledJob binary format string representation."""
-    binary_job = BinaryJob()
-    compiled_job = CompiledJob(binary_job)
-    result = str(compiled_job)
-    assert result.startswith("CompiledJob(binary, size=")
-    assert "bytes)" in result
-
-
-def test_compiled_job_assembly():
+def test_compiled_job():
     """Test CompiledJob assembly format string representation."""
-    assembly_job = AssembledJob()
+    assembly_job = ProtoCompiledJob()
     compiled_job = CompiledJob(assembly_job)
     result = str(compiled_job)
-    assert result.startswith("CompiledJob(assembly, size=")
+    assert result.startswith("CompiledJob(size=")
     assert "bytes)" in result

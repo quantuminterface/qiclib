@@ -19,7 +19,7 @@ _sym_db = _symbol_database.Default()
 
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n\x1fqicode/proto/compiled_job.proto\x12\x0cqicode.proto"\x84\x01\n\x0fSampleablePulse\x12\x11\n\tamplitude\x18\x01 \x01(\x05\x12\r\n\x05index\x18\x02 \x01(\r\x12\x0e\n\x06length\x18\x03 \x01(\r\x12\r\n\x05shape\x18\x04 \x01(\x03\x12\x0c\n\x04hold\x18\x05 \x01(\x08\x12\r\n\x05phase\x18\x06 \x01(\x03\x12\x13\n\x0bshift_phase\x18\x07 \x01(\x08"\xee\x01\n\tBinaryJob\x12+\n\x05\x63\x65lls\x18\x01 \x03(\x0b\x32\x1c.qicode.proto.BinaryJob.Cell\x1a\xb3\x01\n\x04\x43\x65ll\x12\n\n\x02id\x18\x01 \x01(\r\x12\x0c\n\x04\x63ode\x18\x02 \x03(\r\x12\x1e\n\x16original_recording_ids\x18\x03 \x03(\r\x12:\n\x13manipulation_pulses\x18\x04 \x03(\x0b\x32\x1d.qicode.proto.SampleablePulse\x12\x35\n\x0ereadout_pulses\x18\x05 \x03(\x0b\x32\x1d.qicode.proto.SampleablePulse"\xf4\x01\n\x0c\x41ssembledJob\x12.\n\x05\x63\x65lls\x18\x01 \x03(\x0b\x32\x1f.qicode.proto.AssembledJob.Cell\x1a\xb3\x01\n\x04\x43\x65ll\x12\n\n\x02id\x18\x01 \x01(\r\x12\x0c\n\x04\x63ode\x18\x02 \x03(\t\x12\x1e\n\x16original_recording_ids\x18\x03 \x03(\r\x12:\n\x13manipulation_pulses\x18\x04 \x03(\x0b\x32\x1d.qicode.proto.SampleablePulse\x12\x35\n\x0ereadout_pulses\x18\x05 \x03(\x0b\x32\x1d.qicode.proto.SampleablePulseb\x08\x65\x64itionsp\xe8\x07'
+    b'\n\x1fqicode/proto/compiled_job.proto\x12\x0cqicode.proto"\x84\x01\n\x0fSampleablePulse\x12\x11\n\tamplitude\x18\x01 \x01(\x05\x12\r\n\x05index\x18\x02 \x01(\r\x12\x0e\n\x06length\x18\x03 \x01(\r\x12\r\n\x05shape\x18\x04 \x01(\x03\x12\x0c\n\x04hold\x18\x05 \x01(\x08\x12\r\n\x05phase\x18\x06 \x01(\x03\x12\x13\n\x0bshift_phase\x18\x07 \x01(\x08"\x9e\x01\n\x04\x43ode\x12/\n\x08\x61ssembly\x18\x01 \x01(\x0b\x32\x1b.qicode.proto.Code.AssemblyH\x00\x12+\n\x06\x62inary\x18\x02 \x01(\x0b\x32\x19.qicode.proto.Code.BinaryH\x00\x1a\x16\n\x06\x42inary\x12\x0c\n\x04\x63ode\x18\x01 \x03(\r\x1a\x18\n\x08\x41ssembly\x12\x0c\n\x04\x63ode\x18\x01 \x03(\tB\x06\n\x04kind"\x86\x02\n\x0b\x43ompiledJob\x12-\n\x05\x63\x65lls\x18\x01 \x03(\x0b\x32\x1e.qicode.proto.CompiledJob.Cell\x1a\xc7\x01\n\x04\x43\x65ll\x12\n\n\x02id\x18\x01 \x01(\r\x12 \n\x04\x63ode\x18\x02 \x01(\x0b\x32\x12.qicode.proto.Code\x12\x1e\n\x16original_recording_ids\x18\x03 \x03(\r\x12:\n\x13manipulation_pulses\x18\x04 \x03(\x0b\x32\x1d.qicode.proto.SampleablePulse\x12\x35\n\x0ereadout_pulses\x18\x05 \x03(\x0b\x32\x1d.qicode.proto.SampleablePulseb\x08\x65\x64itionsp\xe8\x07'
 )
 
 _globals = globals()
@@ -31,12 +31,14 @@ if not _descriptor._USE_C_DESCRIPTORS:
     DESCRIPTOR._loaded_options = None
     _globals["_SAMPLEABLEPULSE"]._serialized_start = 50
     _globals["_SAMPLEABLEPULSE"]._serialized_end = 182
-    _globals["_BINARYJOB"]._serialized_start = 185
-    _globals["_BINARYJOB"]._serialized_end = 423
-    _globals["_BINARYJOB_CELL"]._serialized_start = 244
-    _globals["_BINARYJOB_CELL"]._serialized_end = 423
-    _globals["_ASSEMBLEDJOB"]._serialized_start = 426
-    _globals["_ASSEMBLEDJOB"]._serialized_end = 670
-    _globals["_ASSEMBLEDJOB_CELL"]._serialized_start = 491
-    _globals["_ASSEMBLEDJOB_CELL"]._serialized_end = 670
+    _globals["_CODE"]._serialized_start = 185
+    _globals["_CODE"]._serialized_end = 343
+    _globals["_CODE_BINARY"]._serialized_start = 287
+    _globals["_CODE_BINARY"]._serialized_end = 309
+    _globals["_CODE_ASSEMBLY"]._serialized_start = 311
+    _globals["_CODE_ASSEMBLY"]._serialized_end = 335
+    _globals["_COMPILEDJOB"]._serialized_start = 346
+    _globals["_COMPILEDJOB"]._serialized_end = 608
+    _globals["_COMPILEDJOB_CELL"]._serialized_start = 409
+    _globals["_COMPILEDJOB_CELL"]._serialized_end = 608
 # @@protoc_insertion_point(module_scope)

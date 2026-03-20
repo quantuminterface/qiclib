@@ -24,12 +24,16 @@ from __future__ import annotations
 import warnings
 from collections.abc import Callable, Iterable
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
 import qicode
 import qicode.proto
+from qiclib.code.compiler.qicode_compiler import (
+    Compilation,
+    QiCodeCompiler,
+)
 from qiclib.code.qi_command import (
     AsmCommand,
     AssignCommand,
@@ -82,6 +86,11 @@ from qiclib.packages.grpc.qic_unitcell_pb2 import JobStatus
 
 if TYPE_CHECKING:
     from qiclib.experiment.qicode.base import QiCodeExperiment
+
+
+def _resolve_property(value: QiCellProperty | Any):
+    """Helper to resolve QiCellProperty values to their actual values."""
+    return value() if isinstance(value, QiCellProperty) else value
 
 
 class QiCell(qicode.QiCell):
@@ -180,8 +189,7 @@ class QiCell(qicode.QiCell):
                     "Manipulation pulses without frequency given, using 90 MHz."
                 )
             return 90e6  # Default frequency
-        freq = self._initial_manip_freq
-        return freq() if isinstance(freq, QiCellProperty) else freq
+        return _resolve_property(self._initial_manip_freq)
 
     @property
     def initial_phase(self):
@@ -189,8 +197,7 @@ class QiCell(qicode.QiCell):
             if len(self.manipulation_pulses) > 0:
                 warnings.warn("Manipulation pulses without phase given, using 0.")
             return 0  # Default phase
-        phase = self._initial_phase
-        return phase() if isinstance(phase, QiCellProperty) else phase
+        return _resolve_property(self._initial_phase)
 
     @property
     def initial_amplitude(self):
@@ -198,8 +205,7 @@ class QiCell(qicode.QiCell):
             if len(self.manipulation_pulses) > 0:
                 warnings.warn("Manipulation pulses without amplitude given, using 1.")
             return 1  # Default amplitude
-        amplitude = self._initial_amplitude
-        return amplitude() if isinstance(amplitude, QiCellProperty) else amplitude
+        return _resolve_property(self._initial_amplitude)
 
     def add_recording_length(self, length):
         if self._rec_length is None:
@@ -225,55 +231,40 @@ class QiCell(qicode.QiCell):
     @property
     def initial_readout_frequency(self):
         if self._initial_readout_freq is None:
-            if len(self.readout_pulses) > 0:
-                # Check if any readout pulse has a variable frequency
-                has_variable_frequency = any(
-                    pulse.frequency is not None
-                    and isinstance(pulse.frequency, QiExpression)
-                    and pulse.frequency.contains_variables()
-                    for pulse in self.readout_pulses
-                )
-                # Only warn if no pulses have frequencies (not if they have variable frequencies)
-                if not has_variable_frequency:
-                    warnings.warn(
-                        "Readout pulses without frequency given, using 30 MHz."
-                    )
+            if len(self.readout_pulses) > 0 and not self._has_variable_frequency():
+                warnings.warn("Readout pulses without frequency given, using 30 MHz.")
             return 30e6  # Default frequency
-        freq = self._initial_readout_freq
-        return freq() if isinstance(freq, QiCellProperty) else freq
+        return _resolve_property(self._initial_readout_freq)
+
+    def _has_variable_frequency(self) -> bool:
+        """Check if any readout pulse has a variable frequency."""
+        return any(
+            pulse.frequency is not None
+            and isinstance(pulse.frequency, QiExpression)
+            and pulse.frequency.contains_variables()
+            for pulse in self.readout_pulses
+        )
 
     @property
     def recording_length(self):
         """the length of the recording pulse"""
-        if self._rec_length is not None:
-            return (
-                self._rec_length()
-                if isinstance(self._rec_length, QiCellProperty)
-                else self._rec_length
-            )
-
-        return 0
+        if self._rec_length is None:
+            return 0
+        return _resolve_property(self._rec_length)
 
     @property
     def initial_recording_offset(self):
         """the recording offset in seconds"""
-        if self._initial_rec_offset is not None:
-            return (
-                self._initial_rec_offset()
-                if isinstance(self._initial_rec_offset, QiCellProperty)
-                else self._initial_rec_offset
-            )
-
-        return 0
+        if self._initial_rec_offset is None:
+            return 0
+        return _resolve_property(self._initial_rec_offset)
 
     def get_result_container(self, result: str) -> QiResult:
-        if result in self._result_container:
-            return self._result_container[result]  # was already added
-        else:
+        if result not in self._result_container:
             box = QiResult(result)
             box._cell = self
             self._result_container[result] = box
-            return box
+        return self._result_container[result]
 
     def add_variable(self, var: _QiVariableBase):
         self._relevant_vars.add(var)
@@ -301,18 +292,13 @@ class QiCell(qicode.QiCell):
         :param name: The name of the data
         :return: A single result, or a dictionary of result names mapped to results.
         """
-        if name is None:
-            result_dict = {}
-            for key, container in self._result_container.items():
-                result_dict.update({key: container.get()})
-            return result_dict
-
-        else:
+        if name is not None:
             return self._result_container[name].get()
+        return {
+            key: container.get() for key, container in self._result_container.items()
+        }
 
     def _resolve_properties(self, len_dict: dict[str, Any]):
-        keys = list(self._unresolved_property)
-
         missing_keys = self._unresolved_property.difference(len_dict.keys())
         if missing_keys:
             raise RuntimeError(
@@ -320,7 +306,7 @@ class QiCell(qicode.QiCell):
                 f"Missing properties: {missing_keys}"
             )
 
-        for key in keys:
+        for key in self._unresolved_property:
             self._properties[key] = len_dict[key]
 
     @property
@@ -328,11 +314,7 @@ class QiCell(qicode.QiCell):
         return len(self._unresolved_property) > 0
 
     def _get_unresolved_properties(self):
-        return [
-            key
-            for key in list(self._unresolved_property)
-            if self._properties.get(key) is None
-        ]
+        return [key for key in self._unresolved_property if key not in self._properties]
 
     def __str__(self) -> str:
         return f"QiCell({self.cell_id})"
@@ -359,10 +341,8 @@ class QiCells(qicode.QiCells):
     def __init__(self, num: int, job: QiJob | None = None) -> None:
         super().__init__(num)
         self.cells = [QiCell(x) for x in range(num)]
-        if job is None:
-            QiJob._current()._register_cells(self.cells)
-        else:
-            job._register_cells(self.cells)
+        job_ref = job if job is not None else QiJob._current()
+        job_ref._register_cells(self.cells)
 
 
 class QiCoupler(qicode.QiCoupler):
@@ -470,41 +450,66 @@ class SubmittedJob:
     query the current status using :meth:`status`.
     """
 
-    def __init__(self, job_id: int, exp: QiCodeExperiment):
-        self.exp = exp
+    def __init__(
+        self,
+        job_id: int,
+        qic,
+        data_handler_factory: DataHandler.Factory,
+        cell_list: list[QiCell],
+        averages: int,
+        use_taskrunner: bool = False,
+    ):
+        self._qic = qic
         self.job_id = job_id
+        self._data_handler_factory = data_handler_factory
+        self._cell_list = cell_list
+        self._use_taskrunner = use_taskrunner
+        self._averages = averages
         self._results = None
+
+    @classmethod
+    def from_experiment(
+        cls,
+        job_id: int,
+        exp: QiCodeExperiment,
+    ):
+        return SubmittedJob(
+            job_id,
+            exp.qic,
+            data_handler_factory=exp._data_handler_factory,
+            cell_list=exp.cell_list,
+            averages=exp.averages,
+            use_taskrunner=exp.use_taskrunner,
+        )
 
     def status(self) -> SubmittedJobStatus:
         if self._results is None:
-            grpc_status = self.exp.qic.cell.status(self.job_id)
-            if grpc_status == JobStatus.ENQUEUED:
-                return SubmittedJobStatus.ENQUEUED
-            elif grpc_status == JobStatus.RUNNING:
-                return SubmittedJobStatus.RUNNING
-            elif grpc_status == JobStatus.FINISHED:
-                return SubmittedJobStatus.FINISHED
-            elif grpc_status == JobStatus.NOT_PRESENT:
-                return SubmittedJobStatus.EXPIRED
-            else:
+            grpc_status = self._qic.cell.cell.status(self.job_id)
+            status_map = {
+                JobStatus.ENQUEUED: SubmittedJobStatus.ENQUEUED,
+                JobStatus.RUNNING: SubmittedJobStatus.RUNNING,
+                JobStatus.FINISHED: SubmittedJobStatus.FINISHED,
+                JobStatus.NOT_PRESENT: SubmittedJobStatus.EXPIRED,
+            }
+            if grpc_status not in status_map:
                 raise AssertionError(f"Unknown grpc job status {grpc_status}")
-        else:
-            # we have results -> the job was fetched
-            return SubmittedJobStatus.FETCHED
+            return status_map[grpc_status]
+        # we have results -> the job was fetched
+        return SubmittedJobStatus.FETCHED
 
     def _process_results(self, result):
         # Check if some errors have been missed but do not raise an exception
-        self.exp.qic.check_errors(raise_exceptions=False)
+        self._qic.check_errors(raise_exceptions=False)
 
-        data_provider = DataProvider.create(result, self.exp.use_taskrunner)
-        data_handler: DataHandler = self.exp._data_handler_factory(
-            data_provider, self.exp.cell_list, self.exp.averages
+        data_provider = DataProvider.create(result, self._use_taskrunner)
+        data_handler: DataHandler = self._data_handler_factory(
+            data_provider, self._cell_list, self._averages
         )
         data_handler.process_results()
 
     def results(self):
         if self._results is None:
-            self._results = self.exp.qic.cell.stream_results(self.job_id)
+            self._results = self._qic.cell.stream_results(self.job_id)
             self._process_results(self._results)
         return self._results
 
@@ -513,6 +518,82 @@ class SubmittedJob:
 
 
 _LiteralType = int | float | list["_LiteralType"]
+
+
+def _generate_proto_from_binary_compilation(binary: Compilation):
+    import qiclib.packages.grpc.datatypes_pb2 as dt
+    import qiclib.packages.grpc.pulsegen_pb2 as pulsegen_proto
+    import qiclib.packages.grpc.qic_unitcell_pb2 as unitcell_proto
+    import qiclib.packages.grpc.sequencer_pb2 as sequencer_proto
+
+    def _convert_pulse(pulse: qicode.proto.SampleablePulse):
+        assert pulse.shape in {1, 0}, (
+            f"Only rectangular pulses or off supported currently, got shape {pulse.shape}"
+        )
+
+        envelope_i = pulse.amplitude / (2**15 - 1) * np.ones(pulse.length)
+        envelope_q = np.zeros(pulse.length)
+
+        # Zero-pad arrays to align to size of 4
+        pad_size = (4 - len(envelope_i) % 4) % 4
+        envelope_i = np.pad(envelope_i, (0, pad_size), mode="constant")
+        envelope_q = np.pad(envelope_q, (0, pad_size), mode="constant")
+        # TODO: This samples, then re-samples the pulse.
+        # Use more efficient method in the pulsegen_proto to directly transmit samplabe pulse.
+        return pulsegen_proto.Pulse(
+            index=pulsegen_proto.IndexSet(
+                cindex=dt.EndpointIndex(value=0),
+                tindex=pulsegen_proto.TriggerSetIndex(value=pulse.index),
+            ),
+            i=envelope_i,
+            q=envelope_q,
+            phase=pulse.phase,
+            hold=pulse.hold,
+            shift_phase=pulse.shift_phase,
+        )
+
+    job = unitcell_proto.Job()
+    compilation_proto = binary.proto()
+    for cell in compilation_proto.cells:
+        if len(cell.readout_pulses) > 13:
+            raise RuntimeError(
+                "Number of readouts exceeded 13. Your program uses too many different pulses."
+            )
+        cell_config = unitcell_proto.CellConfig(index=dt.EndpointIndex(value=cell.id))
+        readout_config = cell_config.readout_config
+        for pulse in cell.readout_pulses:
+            readout_config.pulses.append(_convert_pulse(pulse))
+
+        warnings.warn(
+            "[Readout] Initial readout frequency, recording frequency, recording duration and recording offset not implemented (using some default)"
+        )
+        readout_config.readout_frequency = 10e6
+        readout_config.recording_frequency = 10e6
+        readout_config.recording_duration = 510e-9
+        readout_config.recording_offset = 0
+
+        drive_config = cell_config.drive_config
+        if len(cell.manipulation_pulses) > 13:
+            raise RuntimeError(
+                "Number of pulses exceeded 13. Your program uses too many different pulses."
+            )
+        for pulse in cell.manipulation_pulses:
+            drive_config.pulses.append(_convert_pulse(pulse))
+
+        # TODO: Digital trigger.
+        # No warning because this will already raise in the compiler
+        sequencer_config = unitcell_proto.SequencerConfig(
+            program=sequencer_proto.Program(
+                index=dt.EndpointIndex(value=0),
+                description="No Description",
+                program_data=cell.code,
+            )
+        )
+        cell_config.sequencer_config.CopyFrom(sequencer_config)
+        # TODO: couplers
+        # Also no warning because this will already raise in the compiler
+        job.cell_configs.append(cell_config)
+    return job
 
 
 class QiJob(qicode.QiJob):
@@ -589,20 +670,22 @@ class QiJob(qicode.QiJob):
         if expr.HasField("variable"):
             return self._variables[expr.variable.id]
         if expr.HasField("binary"):
+            val1 = QiExpression._from(self._map_expression(expr.binary.lhs))
+            cls = type(val1)
             op_calc = {
-                qicode.proto.Expression.Binary.Operator.Plus: QiExpression.__add__,
-                qicode.proto.Expression.Binary.Operator.Minus: QiExpression.__sub__,
-                qicode.proto.Expression.Binary.Operator.Mult: QiExpression.__mul__,
-                qicode.proto.Expression.Binary.Operator.Lsh: QiExpression.__lshift__,
-                qicode.proto.Expression.Binary.Operator.Rsh: QiExpression.__rshift__,
-                qicode.proto.Expression.Binary.Operator.And: QiExpression.__and__,
-                qicode.proto.Expression.Binary.Operator.Or: QiExpression.__or__,
-                qicode.proto.Expression.Binary.Operator.Xor: QiExpression.__xor__,
+                qicode.proto.Expression.Binary.Operator.Plus: cls.__add__,
+                qicode.proto.Expression.Binary.Operator.Minus: cls.__sub__,
+                qicode.proto.Expression.Binary.Operator.Mult: cls.__mul__,
+                qicode.proto.Expression.Binary.Operator.Lsh: cls.__lshift__,
+                qicode.proto.Expression.Binary.Operator.Rsh: cls.__rshift__,
+                qicode.proto.Expression.Binary.Operator.And: cls.__and__,
+                qicode.proto.Expression.Binary.Operator.Or: cls.__or__,
+                qicode.proto.Expression.Binary.Operator.Xor: cls.__xor__,
+                qicode.proto.Expression.Binary.Operator.Div: cls.__truediv__,
             }.get(expr.binary.op)
             assert op_calc is not None, (
                 f"Cannot form condition with operator {expr.binary.op}"
             )
-            val1 = QiExpression._from(self._map_expression(expr.binary.lhs))
             return op_calc(
                 val1, QiExpression._from(self._map_expression(expr.binary.rhs))
             )
@@ -727,7 +810,6 @@ class QiJob(qicode.QiJob):
                 qicode.proto.Expression.Binary.Operator.Eq: QiOpCond.EQ,
                 qicode.proto.Expression.Binary.Operator.Gt: QiOpCond.GT,
                 qicode.proto.Expression.Binary.Operator.Ge: QiOpCond.GE,
-                qicode.proto.Expression.Binary.Operator.Eq: QiOpCond.EQ,
                 qicode.proto.Expression.Binary.Operator.Ne: QiOpCond.NE,
             }.get(expr.binary.op)
             assert op_calc is not None, (
@@ -1074,9 +1156,8 @@ class QiJob(qicode.QiJob):
                 )
 
         # Provide a human-readable description of the execution
-        if cell_map is None:
-            cell_map = list(range(len(self.cells)))
-        str_map = ", ".join([f"q[{i}] -> sample[{m}]" for i, m in enumerate(cell_map)])
+        cell_map = cell_map or list(range(len(self.cells)))
+        str_map = ", ".join(f"q[{i}] -> sample[{m}]" for i, m in enumerate(cell_map))
         exp._job_representation = f"{self}\n\nmapped as {str_map} to\n\n{sample}"
 
         return exp
@@ -1090,11 +1171,9 @@ class QiJob(qicode.QiJob):
         data_collection=None,
         use_taskrunner=False,
     ):
-        if data_collection is None:
-            if self._custom_processing is None:
-                data_collection = "average"
-            else:
-                data_collection = "custom"
+        data_collection = data_collection or (
+            "custom" if self._custom_processing else "average"
+        )
 
         # If float, convert averages to int
         averages = int(averages)
@@ -1132,10 +1211,9 @@ class QiJob(qicode.QiJob):
 
         self._build_program(sample, cell_map)
 
-        for_range_list = []
-
-        for cell in self.cells:
-            for_range_list.append(self.cell_seq_dict[cell]._for_range_list)
+        for_range_list = [
+            self.cell_seq_dict[cell]._for_range_list for cell in self.cells
+        ]
 
         return (
             self.cells,
@@ -1184,6 +1262,54 @@ class QiJob(qicode.QiJob):
         )
         exp.run()
 
+    def compile(
+        self,
+        use_qicode_compiler: bool = True,
+        compiler_binary: str | None = None,
+        output_mode: Literal["assembly", "binary"] = "binary",
+    ) -> Compilation:
+        assert use_qicode_compiler, (
+            "Compilation is currently only supported using the QiCode compiler"
+        )
+        return QiCodeCompiler(compiler_binary).compile(self, output_mode=output_mode)
+
+    def _compile_to_proto_job(self, binary: str | None = None):
+        compilation = self.compile(use_qicode_compiler=True, compiler_binary=binary)
+        return _generate_proto_from_binary_compilation(compilation)
+
+    def _new_compiler_submit(
+        self,
+        qic,
+        averages: int,
+        recordings: list[int],
+        binary: str | None = None,
+        data_collection: DataCollection = "average",
+    ):
+        warnings.warn(
+            "This function is experimental and should never be used in production unless you know what you do",
+            UserWarning,
+        )
+        proto_job = self._compile_to_proto_job(binary)
+        warnings.warn(
+            "cells and recordings currently use the default",
+            UserWarning,
+        )
+        job_id = qic.cell.submit(
+            proto_job,
+            averages,
+            list(range(len(self.cells))),
+            recordings=recordings,
+            data_collection=data_collection,
+        )
+        return SubmittedJob(
+            job_id,
+            qic,
+            data_handler_factory=DataHandler.get_factory_by_name(data_collection),
+            cell_list=self.cells,
+            averages=averages,
+            use_taskrunner=False,
+        )
+
     def submit(
         self,
         controller,
@@ -1226,7 +1352,7 @@ class QiJob(qicode.QiJob):
             use_taskrunner,
         )
         job_id = exp.submit()
-        return SubmittedJob(job_id, exp)
+        return SubmittedJob.from_experiment(job_id, exp)
 
     def run_with_data_callback(self, on_new_data: Callable[[dict], None]):
         pass
@@ -1269,6 +1395,8 @@ class QiJob(qicode.QiJob):
         cells: QiCells | None = None,
         cell_index=0,
         cell_map: list[int] | None = None,
+        use_qicode_compiler: bool = False,
+        compiler_binary: str | None = None,
     ):
         """
         Prints the commands as assembler code
@@ -1277,11 +1405,19 @@ class QiJob(qicode.QiJob):
         :param cell_index: the index of the cell in QiCells
         """
         print(f"Print program for cell index {cell_index}")
-        self._build_program(cells, cell_map)
+        if use_qicode_compiler:
+            result = self.compile(
+                compiler_binary=compiler_binary, output_mode="assembly"
+            )
+            code = result.assembly()[cell_index]
+            for el in code:
+                print(el)
+        else:
+            self._build_program(cells, cell_map)
 
-        cell = self.cells[cell_index]
+            cell = self.cells[cell_index]
 
-        self.cell_seq_dict[cell].print_assembler()
+            self.cell_seq_dict[cell].print_assembler()
 
     def _resolve_properties(self, sample: QiSample):
         # Check if any job cell has unresolved properties -> if not, return

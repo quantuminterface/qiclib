@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import os
 from collections.abc import Sequence
 from itertools import count
 from typing import TYPE_CHECKING
@@ -93,3 +95,15 @@ class QiJob:
         num_cells = len(self._job.cells)
         num_couplers = len(self._job.couplers)
         return f"QiJob(commands={num_commands}, cells={num_cells}, couplers={num_couplers}, skipNcoSync={self._job.skipNcoSync})"
+
+    def serialize(self) -> bytes:
+        return self.proto().SerializeToString()
+
+    def serialize_to_file(self, file: str | os.PathLike | io.BufferedIOBase):
+        if isinstance(file, io.BufferedIOBase):
+            file.write(self.serialize())
+        elif isinstance(file, io.TextIOBase):
+            raise AssertionError("File must be opened in binary mode!")
+        else:
+            with open(file, "wb+") as outfile:
+                outfile.write(self.serialize())

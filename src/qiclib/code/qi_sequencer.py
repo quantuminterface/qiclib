@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+import numpy as np
+
 import qiclib.packages.utility as util
 from qiclib.code.qi_command import (
     DigitalTriggerCommand,
@@ -294,7 +296,7 @@ class Sequencer:
             raise RuntimeError(
                 f"Memory error: Cannot store more than {(Sequencer.MEMORY_ADDRESS_MAX - Sequencer.MEMORY_ADDRESS)} data words"
             )
-        self._static_region.extend(content)
+        self._static_region.extend(np.array(content).astype(np.uint32))
         return Pointer(adr)
 
     @property

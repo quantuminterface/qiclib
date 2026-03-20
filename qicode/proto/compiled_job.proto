@@ -32,22 +32,25 @@ message SampleablePulse {
     bool shift_phase= 7;
 }
 
-message BinaryJob {
-    message Cell {
-        uint32 id = 1;
-        repeated uint32 code = 2;
-        repeated uint32 original_recording_ids = 3;
-        repeated SampleablePulse manipulation_pulses = 4;
-        repeated SampleablePulse readout_pulses = 5;
+message Code {
+    message Binary {
+        repeated uint32 code = 1;
     }
 
-    repeated Cell cells = 1;
+    message Assembly {
+        repeated string code = 1;
+    }
+
+    oneof kind {
+        Assembly assembly = 1;
+        Binary binary = 2;
+    }
 }
 
-message AssembledJob {
+message CompiledJob {
     message Cell {
         uint32 id = 1;
-        repeated string code = 2;
+        Code code = 2;
         repeated uint32 original_recording_ids = 3;
         repeated SampleablePulse manipulation_pulses = 4;
         repeated SampleablePulse readout_pulses = 5;

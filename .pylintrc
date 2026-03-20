@@ -1,6 +1,6 @@
 [MAIN]
 ignore-paths = src/qiclib/packages/grpc/
-py-version = 3.6
+py-version = 3.10
 fail-under = 8.0
 
 [FORMAT]

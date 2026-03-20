@@ -22,6 +22,7 @@ import pytest
 
 import qiclib.packages.utility as util
 import qicode.proto
+from qiclib.code import QiIntVariable
 from qiclib.code.qi_command import (
     AssignCommand,
     ForRangeCommand,
@@ -1382,3 +1383,22 @@ def test_variable_amplitude_can_be_used():
             Play(q[1], QiPulse.off())
 
     job._build_program()
+
+
+def test_qi_sample_can_divide():
+    with QiJob() as job:
+        q = QiCells(1)
+        x = QiIntVariable()
+        Assign(x, q[0]["property"] / 2)
+        y = QiIntVariable()
+        Assign(y, 120 / q[0]["property"])
+
+    sample = QiSample(1)
+    sample[0]["property"] = 40
+    job._build_program(sample)
+
+    assert isinstance(job.commands[1], AssignCommand)
+    assert job.commands[1].value() == 20
+
+    assert isinstance(job.commands[3], AssignCommand)
+    assert job.commands[3].value == 3
