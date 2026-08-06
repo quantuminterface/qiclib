@@ -105,11 +105,18 @@ class QiCodeExperiment(BaseExperiment):
         self._data_collection = data_collection
         self.use_taskrunner = use_taskrunner
         self._data_handler_factory: DataHandler.Factory | None = None
+        self._time_tag: int | None = None
 
         self._job_representation = "Unknown QiCodeExperiment"
 
         self._taskrunner: _TaskrunnerSettings | None = None
         self._update_taskrunner_settings_and_data_handler()
+
+    def time_tag(self) -> int | None:
+        """
+        Relative time stamp when this experiment was executed
+        """
+        return self._time_tag
 
     def _update_taskrunner_settings_and_data_handler(self):
         self._update_taskrunner_settings()
@@ -454,7 +461,7 @@ class QiCodeExperiment(BaseExperiment):
         def progress_callback(progress):
             self._set_progress(progress, "Averages")
 
-        result = self.qic.cell.run_experiment(
+        time_tag, result = self.qic.cell.run_experiment(
             averages=averages,
             cells=cells,
             recordings=recordings,
@@ -462,6 +469,8 @@ class QiCodeExperiment(BaseExperiment):
             progress_callback=progress_callback,
         )
         # Last progress update already sets it to max, so finish is not necessary
+
+        self._time_tag = time_tag
 
         return result
 

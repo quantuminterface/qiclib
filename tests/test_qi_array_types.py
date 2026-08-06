@@ -14,6 +14,35 @@ def test_qi_array_can_be_declared():
     job._build_program()
 
 
+def test_array_does_not_match_for_non_array():
+    arr = QiType.ARRAY(QiType.NORMAL, length=5)
+    assert not arr.matches(QiType.NORMAL)
+
+
+def test_array_does_not_match_for_mismatched_lengths():
+    a = QiType.ARRAY(QiType.NORMAL, length=5)
+    b = QiType.ARRAY(QiType.NORMAL, length=3)
+    assert not a.matches(b)
+
+
+def test_array_matches_for_same_lengths_same_element():
+    a = QiType.ARRAY(QiType.NORMAL, length=4)
+    b = QiType.ARRAY(QiType.NORMAL, length=4)
+    assert a.matches(b)
+
+
+def test_array_matches_when_one_length_is_unspecified():
+    a = QiType.ARRAY(QiType.NORMAL, length=5)
+    b = QiType.ARRAY(QiType.NORMAL, length=None)
+    assert a.matches(b)
+
+
+def test_array_does_not_match_for_different_element_types():
+    a = QiType.ARRAY(QiType.NORMAL, length=3)
+    b = QiType.ARRAY(QiType.TIME, length=3)
+    assert not a.matches(b)
+
+
 def test_assigning_element_of_array_to_variable():
     with QiJob() as job:
         v = QiVariable(type=QiType.ARRAY(element_type=QiType.NORMAL, length=10))
@@ -155,3 +184,19 @@ def test_qi_array_with_amplitude():
     assert len(job.cells[0].readout_pulses) == 1
     readout_pulse = job.cells[0].readout_pulses[0](1e9)
     assert all(readout_pulse == 1)
+
+
+def test_qi_array_wait_single_value():
+    with QiJob() as job:
+        q = QiCells(1)
+        v = QiVariable(value=[1e-6])
+        Wait(q[0], v[0])
+
+    assert job.get_assembly() == [
+        "tr 0x0, 0x0, 0x0, 0x0, 0x0, 0x0",
+        "lui r1, 0x8000",
+        "addi r1, r1, 0x400",
+        "lw r2, 0(r1)",
+        "wtr r2, 0x0",
+        "end",
+    ]

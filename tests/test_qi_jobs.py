@@ -14,15 +14,17 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import json
+import math
 import os
 import re
 
 import numpy as np
 import pytest
+from inline_snapshot import snapshot
 
 import qiclib.packages.utility as util
 import qicode.proto
-from qiclib.code import QiIntVariable
+from qiclib.code import QiIntVariable, While
 from qiclib.code.qi_command import (
     AssignCommand,
     ForRangeCommand,
@@ -1402,3 +1404,335 @@ def test_qi_sample_can_divide():
 
     assert isinstance(job.commands[3], AssignCommand)
     assert job.commands[3].value == 3
+
+
+def test_active_reset_while_recording_if():
+    """Active reset: While(state != 0) contains Recording(state_to=) and conditional Play."""
+    with QiJob() as job:
+        q = QiCells(1)
+        state = QiStateVariable()
+
+        PlayReadout(q[0], QiPulse(1e-6))
+        Recording(q[0], state_to=state, duration=1e-6)
+
+        with While(state != 0):
+            PlayReadout(q[0], QiPulse(1e-6))
+            Recording(q[0], state_to=state, duration=1e-6)
+            with If(state != 0):
+                Play(q[0], QiPulse(100e-9))  # pi pulse to reset
+
+    assert (
+        job.get_assembly()
+        == snapshot(
+            [
+                "tr 0x0, 0x0, 0x0, 0x0, 0x0, 0x0",  # start
+                "tr 0x1, 0x2, 0x0, 0x0, 0x0, 0x0",  # Readout + Recording
+                "wtq r1, 0",  # Await qubit state
+                "beq r1, r0, 0x7",  # If state == 0 -> finish
+                "tr 0x1, 0x2, 0x0, 0x0, 0x0, 0x0",  # Readout + Recording (inside While)
+                "wtq r1, 0",  # Await qubit state
+                "beq r1, r0, 0x3",  # If r1 == 0 => jump to start (which will then jump to finish)
+                "tr 0x0, 0x0, 0x1, 0x0, 0x0, 0x0",  # Trigger pi pulse
+                "wti 0x18",  # Wait for pi pulse to finish
+                "j -0x6",  # Jump to start of While loop
+                "end",
+            ]
+        )
+    )
+
+
+def test_parallel_ramsey_two_qubits():
+    """
+    Build a 2-cell Parallel Ramsey job: ForRange sweeping delay, two Parallel pi/2
+    blocks bracketing a variable Wait, and Sync.
+    """
+    pi_half = QiPulse(length=20e-9)
+
+    with QiJob() as job:
+        q = QiCells(2)
+        delay = QiTimeVariable()
+
+        with ForRange(delay, 0, 3e-6, 100e-9):
+            with Parallel():
+                Play(q[0], pi_half)
+                Play(q[1], pi_half)
+            Wait(q[0], delay)
+            Wait(q[1], delay)
+            with Parallel():
+                Play(q[0], pi_half)
+                Play(q[1], pi_half)
+            Sync(q[0], q[1])
+
+    assert job.get_assembly(0) == snapshot(
+        [
+            "tr 0x0, 0x0, 0x0, 0x0, 0x0, 0x0",  # start
+            "addi r1, r0, 0x0",  # initialize r1 := 0
+            "tr 0x0, 0x0, 0x1, 0x0, 0x0, 0x0",  # Peeled loop iteration 0
+            "wti 0x4",  # Wait for 4 ns
+            "tr 0x0, 0x0, 0x1, 0x0, 0x0, 0x0",  # Second Play
+            "wti 0x4",  # Second wait
+            "addi r2, r0, 0x2ee",  # Initialize r2 : end value
+            "addi r1, r0, 0x19",  # Increment r1 by 100 ns
+            "bge r1, r2, 0x8",  # for-loop conditional branch
+            "tr 0x0, 0x0, 0x1, 0x0, 0x0, 0x0",  # pi/2 pulse play
+            "wti 0x4",  # pi/2 pulse wait duration
+            "wtr r1, 0x0",  # Variable wait; source is register
+            "tr 0x0, 0x0, 0x1, 0x0, 0x0, 0x0",  # pi/2 pulse play
+            "wti 0x4",  # pi/2 pulse wait duration
+            "addi r1, r1, 0x19",  # Increment r1 (loop)
+            "j -0x7",  # Jump to start of loop
+            "end",
+        ]
+    )
+
+    assert job.get_assembly(1) == job.get_assembly(0)
+
+
+# There was a bug (AttributeError: 'int' object has no attribute 'insert') for what seems to be correct code
+@pytest.mark.skip(reason="Unresolved Bug")
+def test_nested_amplitude_length_sweep():
+    with QiJob() as job:
+        q = QiCells(1)
+        amp = QiAmplitudeVariable()
+        length = QiTimeVariable()
+
+        with ForRange(amp, 0.1, 1.0, 0.1):
+            with ForRange(length, 20e-9, 200e-9, 20e-9):
+                Play(q[0], QiPulse(length, amplitude=amp))
+                Recording(q[0], 200e-9, save_to="result")
+
+    assert job.get_assembly() == snapshot()
+
+
+def test_cpmg_n_dynamical_decoupling():
+    """CPMG-2: outer delay sweep, inner loop of 2 Y-axis pi pulses (RotateFrame +-pi/2 + Play)."""
+    n_pulses = 2
+    pi_len = 20e-9
+    pi_half_len = 10e-9
+
+    with QiJob() as job:
+        q = QiCells(1)
+        delay = QiTimeVariable()
+        seg = QiTimeVariable()
+        i = QiVariable(int)
+
+        with ForRange(delay, 200e-9, 600e-9, 200e-9):
+            # seg = delay / (2 * n_pulses); n_pulses=2 -> right-shift by 2
+            Assign(seg, delay >> 2)
+            # initial pi/2 pulse (X axis)
+            Play(q[0], QiPulse(pi_half_len))
+            # N refocusing pi pulses rotated to Y axis via RotateFrame
+            with ForRange(i, 0, n_pulses, 1):
+                Wait(q[0], seg)
+                RotateFrame(q[0], math.pi / 2)
+                Play(q[0], QiPulse(pi_len))
+                RotateFrame(q[0], -(math.pi / 2))
+                Wait(q[0], seg)
+            # final pi/2 pulse
+            Play(q[0], QiPulse(pi_half_len))
+            PlayReadout(q[0], QiPulse(400e-9))
+            Recording(q[0], 400e-9, 0, save_to="result")
+            Wait(q[0], 50e-6)
+
+    assert job.get_assembly() == snapshot(
+        [
+            "tr 0x0, 0x0, 0x0, 0x0, 0x0, 0x0",  # Start trigger
+            "addi r4, r0, 0x96",  # Initialize r4: loop end
+            "addi r1, r0, 0x32",  # Initialize r1: loop start
+            "bge r1, r4, 0x17",  # Loop condition: If r1 > r4; goto end
+            "sra r5, r1, 0x2",  # Multiply r5 := r1 / 2 (r5 == wait time)
+            "addi r2, r5, 0x0",  # Add r2 := r5
+            "tr 0x0, 0x0, 0x1, 0x0, 0x0, 0x0",  # Trigger play command
+            "wti 0x2",  # Wait for 2 cycles (10 ns)
+            "addi r5, r0, 0x2",  # Inner loop end value initialization: r5 = n_pulses (2)
+            "addi r3, r0, 0x0",  # Inner loop initial value initialization: r3 = 0
+            "bge r3, r5, 0x9",  # If r3 > r5 => goto end
+            "wtr r2, 0x0",  # Wait for variable amout of time (r1 / 2)
+            "tr 0x0, 0x0, 0x2, 0x0, 0x0, 0x0",  # Rotate Frame
+            "tr 0x0, 0x0, 0x3, 0x0, 0x0, 0x0",  # Play
+            "wti 0x4",  # Wait for pi-pulse
+            "tr 0x0, 0x0, 0x4, 0x0, 0x0, 0x0",  # Rotate Frame
+            "wtr r2, 0x0",  # Wait for delay agabin
+            "addi r3, r3, 0x1",  # Increment: r3 := r3 + 1
+            "j -0x8",  # Jump to loop start
+            "tr 0x0, 0x0, 0x1, 0x0, 0x0, 0x0",  # Trigger pi/2 pulse
+            "wti 0x2",  # Wait...
+            "tr 0x1, 0x1, 0x0, 0x0, 0x0, 0x0",  # Record qubit state
+            "wti 0x64",
+            "wti 0x30d4",  # wait for T1
+            "addi r1, r1, 0x32",  # Increment r1
+            "j -0x16",  # Jump to outer loop start
+            "end",
+        ]
+    )
+
+
+def test_allxy_calibration():
+    """
+    AllXY gate-pair diagnostic with 5 representative pairs.
+
+    Two QiVariables hold the per-pair phase for gate-1 and gate-2 respectively.
+    A ForRange iterates over the pair index and uses QiIndexed (via __getitem__)
+    to fetch each phase dynamically.
+    """
+    N = 5
+    # Five representative AllXY pairs: (Id,Id), (X,X), (Y,Y), (X,Y), (Y,X)
+    g1_phases = [0.0, 0.0, math.pi / 2, 0.0, math.pi / 2]
+    g2_phases = [0.0, 0.0, math.pi / 2, math.pi / 2, 0.0]
+
+    with QiJob() as job:
+        q = QiCells(1)
+        # QiVariable with an iterable value creates an array variable;
+        # the element type (PHASE) is inferred from the pulse's phase= argument.
+        phases1 = QiVariable(value=g1_phases)  # gate-1 phase per pair
+        phases2 = QiVariable(value=g2_phases)  # gate-2 phase per pair
+        idx = QiIntVariable()
+
+        with ForRange(idx, 0, N, 1):
+            Play(q[0], QiPulse(20e-9, phase=phases1[idx]))  # gate 1
+            Play(q[0], QiPulse(20e-9, phase=phases2[idx]))  # gate 2
+            Recording(q[0], 400e-9, save_to="result")
+
+    assert (
+        job.get_assembly()
+        == snapshot(
+            [
+                "tr 0x0, 0x0, 0x0, 0x0, 0x0, 0x0",  # Start trigger
+                "addi r2, r0, 0x5",  # Set r2 = 5
+                "addi r1, r0, 0x0",  # Set r1 = 0
+                "bge r1, r2, 0x17",  # If r1 > r2 => Jump to end
+                "lui r4, 0x8000",  # Set r4 = 0x8400 (memory base address)
+                "addi r4, r4, 0x400",  # ...
+                "add r3, r1, r4",  # Set r3 := r1 + r4 (memory address)
+                "lw r4, 0(r3)",  # Load the memory at the address -> Store to r4
+                "lui r5, 0x6000",  # Set r5 := 0x600C
+                "addi r5, r5, 0xc",  # ...
+                "sw r4, 0(r5)",  # Set NCO Phase using memory-mapped I/O
+                "tr 0x0, 0x0, 0x1, 0x0, 0x0, 0x0",  # First play command
+                "wti 0x4",  # Wait until play is done...
+                "lui r6, 0x8000",  # Set r6 = 0x8405 (memory base address 2)
+                "addi r6, r6, 0x405",  # ...
+                "add r5, r1, r6",  # Increment r5 := r1 + r6 (memory address)
+                "lw r6, 0(r5)",  # Load r6 := mem[r5] (gate-2 phase at index)
+                "lui r7, 0x6000",  # Set r7 := 0x600C
+                "addi r7, r7, 0xc",  # ...
+                "sw r6, 0(r7)",  # Set NCO address
+                "tr 0x0, 0x0, 0x1, 0x0, 0x0, 0x0",  # Second Play command (second phase applied)
+                "wti 0x4",  # Wait until second play is over
+                "tr 0x0, 0x1, 0x0, 0x0, 0x0, 0x0",  # Trigger Recording
+                "wti 0x64",  # Wait for recording to finish
+                "addi r1, r1, 0x1",  # Increment r1 by 1
+                "j -0x16",  # Jump to loop start
+                "end",
+            ]
+        )
+    )
+
+
+def _collect_save_to(cmds):
+    """Collect save_to strings from RecordingCommands, including those linked via PlayReadoutCommand.recording."""
+    result = set()
+    for cmd in cmds:
+        if isinstance(cmd, RecordingCommand) and isinstance(cmd.save_to, str):
+            result.add(cmd.save_to)
+        if isinstance(cmd, PlayReadoutCommand) and isinstance(
+            cmd.recording, RecordingCommand
+        ):
+            if isinstance(cmd.recording.save_to, str):
+                result.add(cmd.recording.save_to)
+    return result
+
+
+# The second job should produce identical results like the first job (maybe except for register allocation).
+# However, the wait times are longer in the second job.
+# This is potentially a bug in the Sync calculation.
+@pytest.mark.skip(reason="Unresolved Bug")
+def test_two_qubit_parallel_readout():
+    """Simultaneous readout of two qubits via Parallel PlayReadout with independent Recordings."""
+    with QiJob() as job:
+        q = QiCells(2)
+        sweep = QiIntVariable()
+
+        with ForRange(sweep, 0, 3, 1):
+            with Parallel():
+                PlayReadout(q[0], QiPulse(500e-9))
+                Recording(q[0], 500e-9, save_to="result_q0")
+                PlayReadout(q[1], QiPulse(500e-9))
+                Recording(q[1], 500e-9, save_to="result_q1")
+            Sync(q[0], q[1])
+
+    assert job.get_assembly(0) == snapshot(
+        [
+            "tr 0x0, 0x0, 0x0, 0x0, 0x0, 0x0",
+            "addi r2, r0, 0x3",
+            "addi r1, r0, 0x0",
+            "bge r1, r2, 0x5",
+            "tr 0x1, 0x1, 0x0, 0x0, 0x0, 0x0",
+            "wti 0x7d",
+            "addi r1, r1, 0x1",
+            "j -0x4",
+            "end",
+        ]
+    )
+
+    assert job.get_assembly(1) == snapshot(
+        [
+            "tr 0x0, 0x0, 0x0, 0x0, 0x0, 0x0",
+            "addi r2, r0, 0x3",
+            "addi r1, r0, 0x0",
+            "bge r1, r2, 0x5",
+            "tr 0x1, 0x1, 0x0, 0x0, 0x0, 0x0",
+            "wti 0x7d",  # Bug here: job.get_assembly(1) returns 0x6F; should be 0x7D
+            "addi r1, r1, 0x1",
+            "j -0x4",
+            "end",
+        ]
+    )
+
+
+def test_frequency_swept_spectroscopy():
+    """Frequency-swept spectroscopy: ForRange over a QiFrequencyVariable sweeps
+    the drive frequency from (center - span/2) to (center + span/2) in steps of
+    freq_step.  Each iteration plays a drive pulse at the current frequency and
+    immediately records the response.
+    """
+    center_freq = 100e6  # Hz
+    span = 20e6  # Hz  -> sweep 90 MHz ... 110 MHz
+    freq_step = 1e6  # Hz  -> 20 steps
+
+    with QiJob() as job:
+        q = QiCells(1)
+        freq = QiFrequencyVariable()
+
+        with ForRange(
+            freq,
+            center_freq - span / 2,  # 90 MHz start
+            center_freq + span / 2,  # 110 MHz stop (exclusive)
+            freq_step,  # 1 MHz step
+        ):
+            Play(q[0], QiPulse(1e-6, frequency=freq))
+            PlayReadout(q[0], QiPulse(1e-6, frequency=100e6))
+            Recording(q[0], 1e-6, save_to="spec")
+
+    assert job.get_assembly() == snapshot(
+        [
+            "tr 0x0, 0x0, 0x0, 0x0, 0x0, 0x0",  # Start
+            "lui r2, 0x1c6a8000",  # Set r2 := Loop end
+            "addi r2, r2, 0xef4",  # ...
+            "lui r1, 0x170a4000",  # Set r1 := loop start
+            "addi r1, r1, 0xd71",  # ...
+            "bge r1, r2, 0xc",  # If r1 > r2 => jump to end
+            "lui r3, 0x6000",  # Load memory address
+            "addi r3, r3, 0x5",  # ...
+            "sw r1, 0(r3)",  # Store r1 -> Memory address (set NCO frequency)
+            "tr 0x0, 0x0, 0x1, 0x0, 0x0, 0x0",  # Play manipulation pulse
+            "wti 0xf9",  # Wait until manipulation has finished
+            "tr 0x1, 0x1, 0x0, 0x0, 0x0, 0x0",  # Play Readout + Recording
+            "wti 0xfa",  # Wait for finish
+            "lui r3, 0x419000",  # Address increment
+            "addi r3, r3, 0x937",  # ...
+            "add r1, r1, r3",  # Increment address
+            "j -0xb",  # Jump to start
+            "end",
+        ]
+    )

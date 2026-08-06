@@ -2,6 +2,6 @@
 
 # Having a script that generates the proto file on-the fly when they are not part of the pythong project is a massive
 # pain. Therefore, we resort to updating them manually using this script
-uvx --with grpcio-tools python -m grpc_tools.protoc --python_out=src/ --pyi_out=src -I ../.. ../../qicode/proto/*.proto
+uvx --with grpcio-tools==1.73.1 python -m grpc_tools.protoc --python_out=src/ --pyi_out=src -I ../.. ../../qicode/proto/*.proto
 uv run ruff check --fix src/qicode/proto
 uv run ruff format src/qicode/proto

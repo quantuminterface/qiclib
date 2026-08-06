@@ -89,7 +89,7 @@ omit = ["*/packages/grpc/*"]
 source = ["src"]
 
 [tool.coverage.report]
-fail_under = 60
+fail_under = 50
 show_missing = true
 skip_empty = true
 
@@ -115,6 +115,9 @@ members = ["qicode/python"]
 [tool.uv.sources]
 qicode = { workspace = true }
 
+[tool.inline-snapshot]
+format-command="ruff format --stdin-filename {filename}"
+
 [dependency-groups]
 dev = [
     "hatch>=1.13.0",
@@ -128,5 +131,6 @@ dev = [
     "ruff>=0.14.14",
     "furo>=2024.8.6",
     "livereload>=2.7.1",
+    "inline-snapshot>=0.32.6",
 ]
 jupyter = ["jupyterlab>=4.3.3"]

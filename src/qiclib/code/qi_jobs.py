@@ -21,13 +21,16 @@ Here, all important commands write QiPrograms are defined.
 
 from __future__ import annotations
 
+import dataclasses
 import warnings
 from collections.abc import Callable, Iterable
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
+import numpy.typing as npt
 
+import qiclib
 import qicode
 import qicode.proto
 from qiclib.code.compiler.qicode_compiler import (
@@ -152,15 +155,6 @@ class QiCell(qicode.QiCell):
     def cell_id(self) -> int:
         return self._proto().index
 
-    def __setitem__(self, key, value):
-        raise NotImplementedError
-
-    def __call__(self, qic):
-        return qic.cell[self.qic_cell]
-
-    def get_properties(self):
-        return self._properties.copy()
-
     def add_pulse(self, pulse: _QiPulse):
         if pulse not in self.manipulation_pulses:
             self.manipulation_pulses.append(pulse)
@@ -271,9 +265,6 @@ class QiCell(qicode.QiCell):
 
     def get_number_of_recordings(self):
         return len(self._result_recording_order)
-
-    def set_default_readout(self, pulse):
-        pass
 
     def reset(self):
         for container in self._result_container.values():
@@ -520,7 +511,9 @@ class SubmittedJob:
 _LiteralType = int | float | list["_LiteralType"]
 
 
-def _generate_proto_from_binary_compilation(binary: Compilation):
+def _generate_proto_from_binary_compilation(
+    binary: Compilation,
+) -> qiclib.packages.grpc.qic_unitcell_pb2.Job:
     import qiclib.packages.grpc.datatypes_pb2 as dt
     import qiclib.packages.grpc.pulsegen_pb2 as pulsegen_proto
     import qiclib.packages.grpc.qic_unitcell_pb2 as unitcell_proto
@@ -577,6 +570,9 @@ def _generate_proto_from_binary_compilation(binary: Compilation):
             raise RuntimeError(
                 "Number of pulses exceeded 13. Your program uses too many different pulses."
             )
+        warnings.warn(
+            "[Manipulation] Initial frequency not implemented (using some default)"
+        )
         for pulse in cell.manipulation_pulses:
             drive_config.pulses.append(_convert_pulse(pulse))
 
@@ -586,7 +582,7 @@ def _generate_proto_from_binary_compilation(binary: Compilation):
             program=sequencer_proto.Program(
                 index=dt.EndpointIndex(value=0),
                 description="No Description",
-                program_data=cell.code,
+                program_data=cell.code.binary.code,
             )
         )
         cell_config.sequencer_config.CopyFrom(sequencer_config)
@@ -594,6 +590,18 @@ def _generate_proto_from_binary_compilation(binary: Compilation):
         # Also no warning because this will already raise in the compiler
         job.cell_configs.append(cell_config)
     return job
+
+
+@dataclasses.dataclass
+class ExecutionInfo:
+    results: npt.NDArray
+    """
+    The results obtained from an experiment
+    """
+    timestamp: int
+    """
+    Relative timestamp when the experiment started
+    """
 
 
 class QiJob(qicode.QiJob):
@@ -1238,8 +1246,8 @@ class QiJob(qicode.QiJob):
         coupling_map: list[int] | None = None,
         data_collection: DataCollection | None = None,
         use_taskrunner: bool = False,
-    ):
-        """executes the job and returns the results
+    ) -> ExecutionInfo:
+        """executes the job and returns execution information
 
         :param controller: the QiController on which the job should be executed
         :param sample: the QiSample object used for execution of pulses and extracts parameters for the experiment
@@ -1260,7 +1268,8 @@ class QiJob(qicode.QiJob):
             data_collection,
             use_taskrunner,
         )
-        exp.run()
+        results = exp.run()
+        return ExecutionInfo(results, exp.time_tag())
 
     def compile(
         self,
@@ -1273,15 +1282,10 @@ class QiJob(qicode.QiJob):
         )
         return QiCodeCompiler(compiler_binary).compile(self, output_mode=output_mode)
 
-    def _compile_to_proto_job(self, binary: str | None = None):
-        compilation = self.compile(use_qicode_compiler=True, compiler_binary=binary)
-        return _generate_proto_from_binary_compilation(compilation)
-
     def _new_compiler_submit(
         self,
-        qic,
+        qic: qiclib.QiController,
         averages: int,
-        recordings: list[int],
         binary: str | None = None,
         data_collection: DataCollection = "average",
     ):
@@ -1289,16 +1293,20 @@ class QiJob(qicode.QiJob):
             "This function is experimental and should never be used in production unless you know what you do",
             UserWarning,
         )
-        proto_job = self._compile_to_proto_job(binary)
-        warnings.warn(
-            "cells and recordings currently use the default",
-            UserWarning,
+        compilation = self.compile(
+            use_qicode_compiler=True, compiler_binary=binary, output_mode="binary"
         )
+        proto_job = _generate_proto_from_binary_compilation(compilation)
+        for i, cell in enumerate(self.cells):
+            result_cell = compilation.cell(i)
+            cell._result_recording_order = [
+                cell.get_result_container(name) for name in result_cell.recordings()
+            ]
         job_id = qic.cell.submit(
             proto_job,
             averages,
             list(range(len(self.cells))),
-            recordings=recordings,
+            recordings=[len(cell.recordings()) for cell in compilation.cells()],
             data_collection=data_collection,
         )
         return SubmittedJob(

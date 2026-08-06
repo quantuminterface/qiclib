@@ -166,6 +166,26 @@ class DACBlockStatus:
     fifo_flags_asserted: bool
 
 
+@dataclass
+class Qmc:
+    """
+    Quadrature Modulation Correction information
+    """
+
+    gain_correction: float
+    """
+    Gain correction factor from [0..2)
+    """
+    phase_correction: float
+    """
+    Phase correction factor from (-26.5°..26.5°)
+    """
+    offset_correction: int
+    """
+    Offset correction
+    """
+
+
 class Tile(ABC):
     def __init__(self, stub: grpc_stub.RFdcServiceStub, tile: int):
         self._stub = stub
@@ -310,6 +330,81 @@ class DataConverter(ABC):
         self._stub.SetNyquistZone(
             proto.NyquistZone(index=self._endpoint_index(), value=zone)
         )
+
+    @property
+    def qmc(self) -> Qmc:
+        qmc = self._stub.GetQmcSettings(self._endpoint_index())
+        return Qmc(qmc.gain_correction, qmc.phase_correction, qmc.offset_correction)
+
+    def update_qmc(
+        self,
+        gain_correction: float | Literal["disable"] | None = None,
+        phase_correction: float | Literal["disable"] | None = None,
+        offset_correction: int | Literal["disable"] | None = None,
+    ):
+        """
+        Update Quadrature Modulation Correction (QMC) factors.
+        Omiting any of the correction factors will keep them as they are.
+        Specifying "disable" for any parameter disables the feature.
+
+        :param gain_correction:
+            Gain in the range [0..2) to be applied to I or Q.
+            For separate I and Q correction, use the correspoinding DACs or ADCs (e.g., DAC 0 drives I, DAC 1 drives Q)
+        :param phase_correction:
+            Phase correction between I and Q in the range (-26.5°..26.5°)
+            Must be applied to the first DAC/ADC
+        :param offset_correction:
+            Static offset to be applied to either channel.
+            This is in DAC or ADC units ranging from -2048 to 2047
+
+        # Example
+        ```
+        rfdc = ...  # Get RFdc
+        # Multiplies I with 1.2, adapts the phase between I and Q by 12.5° and adds a static offset to the I path of 512 DAC counts
+        rfdc.dac(0, 0).update_qmc(
+            gain_correction=1.2, phase_correction=12.5, offset_correction=512
+        )
+        rfdc.dac(0, 1).update_qmc(
+            gain_correction=0.9, offset_correction=125
+        )  # No phase correction, this was already done on dac(0, 0)
+        ```
+        """
+        qmc = proto.Qmc(index=self._endpoint_index())
+        if isinstance(gain_correction, (float, int)):
+            qmc.gain_correction = gain_correction
+            qmc.gain_correction_update = proto.Qmc.UpdateMode.UPDATE
+        elif gain_correction is None:
+            qmc.gain_correction_update = proto.Qmc.UpdateMode.KEEP
+        elif gain_correction.lower() == "disable":
+            qmc.gain_correction_update = proto.Qmc.UpdateMode.DISABLE
+        else:
+            raise AttributeError(f"Invalid input {gain_correction} for gain_correction")
+
+        if isinstance(phase_correction, (float, int)):
+            qmc.phase_correction = phase_correction
+            qmc.phase_correction_update = proto.Qmc.UpdateMode.UPDATE
+        elif phase_correction is None:
+            qmc.phase_correction_update = proto.Qmc.UpdateMode.KEEP
+        elif phase_correction.lower() == "disable":
+            qmc.phase_correction_update = proto.Qmc.UpdateMode.DISABLE
+        else:
+            raise AttributeError(
+                f"Invalid input {phase_correction} for phase_correction"
+            )
+
+        if isinstance(offset_correction, int):
+            qmc.offset_correction = offset_correction
+            qmc.offset_correction_update = proto.Qmc.UpdateMode.UPDATE
+        elif offset_correction is None:
+            qmc.offset_correction_update = proto.Qmc.UpdateMode.KEEP
+        elif offset_correction.lower() == "disable":
+            qmc.offset_correction_update = proto.Qmc.UpdateMode.DISABLE
+        else:
+            raise AttributeError(
+                f"Invalid input {offset_correction} for offset_correction"
+            )
+
+        self._stub.UpdateQmc(qmc)
 
 
 class DAC(DataConverter):

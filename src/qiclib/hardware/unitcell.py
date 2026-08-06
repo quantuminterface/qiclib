@@ -338,7 +338,7 @@ class UnitCells(PlatformComponent, Mapping):
         averages: int,
         cells: list[int],
         recordings: list[int],
-        data_collection: str = "average",
+        data_collection: DataCollection = "average",
     ) -> int:
         switch_dict = {
             "average": proto.AVERAGE,
@@ -461,4 +461,10 @@ class UnitCells(PlatformComponent, Mapping):
                 progress_callback(progress.progress)
         if experiment_results is None:
             experiment_results = proto.ExperimentResults()
-        return self._process_results(mode, experiment_results.results)
+        return experiment_results.time_tag, self._process_results(
+            mode, experiment_results.results
+        )
+
+    @property
+    def hw_info(self):
+        return self._stub.GetHwInfo(dt.Empty())

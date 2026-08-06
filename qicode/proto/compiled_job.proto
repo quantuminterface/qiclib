@@ -47,11 +47,15 @@ message Code {
     }
 }
 
+message Recording {
+    string bucket = 1;
+}
+
 message CompiledJob {
     message Cell {
         uint32 id = 1;
         Code code = 2;
-        repeated uint32 original_recording_ids = 3;
+        repeated Recording recordings = 3;
         repeated SampleablePulse manipulation_pulses = 4;
         repeated SampleablePulse readout_pulses = 5;
     }

@@ -107,3 +107,19 @@ class QiJob:
         else:
             with open(file, "wb+") as outfile:
                 outfile.write(self.serialize())
+
+    @classmethod
+    def deserialize(cls, data: bytes):
+        job = cls()
+        job._job = Job.FromString(data)
+        return job
+
+    @classmethod
+    def deserialize_from_file(cls, file: str | os.PathLike | io.BufferedIOBase):
+        if isinstance(file, io.BufferedIOBase):
+            return cls.deserialize(file.read())
+        elif isinstance(file, io.TextIOBase):
+            raise AssertionError("File must be opened in binary mode!")
+        else:
+            with open(file, "rb") as infile:
+                return cls.deserialize(infile.read())

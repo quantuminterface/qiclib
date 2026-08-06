@@ -67,6 +67,12 @@ class Code(_message.Message):
         binary: Code.Binary | _Mapping | None = ...,
     ) -> None: ...
 
+class Recording(_message.Message):
+    __slots__ = ("bucket",)
+    BUCKET_FIELD_NUMBER: _ClassVar[int]
+    bucket: str
+    def __init__(self, bucket: str | None = ...) -> None: ...
+
 class CompiledJob(_message.Message):
     __slots__ = ("cells",)
     class Cell(_message.Message):
@@ -74,17 +80,17 @@ class CompiledJob(_message.Message):
             "code",
             "id",
             "manipulation_pulses",
-            "original_recording_ids",
             "readout_pulses",
+            "recordings",
         )
         ID_FIELD_NUMBER: _ClassVar[int]
         CODE_FIELD_NUMBER: _ClassVar[int]
-        ORIGINAL_RECORDING_IDS_FIELD_NUMBER: _ClassVar[int]
+        RECORDINGS_FIELD_NUMBER: _ClassVar[int]
         MANIPULATION_PULSES_FIELD_NUMBER: _ClassVar[int]
         READOUT_PULSES_FIELD_NUMBER: _ClassVar[int]
         id: int
         code: Code
-        original_recording_ids: _containers.RepeatedScalarFieldContainer[int]
+        recordings: _containers.RepeatedCompositeFieldContainer[Recording]
         manipulation_pulses: _containers.RepeatedCompositeFieldContainer[
             SampleablePulse
         ]
@@ -93,7 +99,7 @@ class CompiledJob(_message.Message):
             self,
             id: int | None = ...,
             code: Code | _Mapping | None = ...,
-            original_recording_ids: _Iterable[int] | None = ...,
+            recordings: _Iterable[Recording | _Mapping] | None = ...,
             manipulation_pulses: _Iterable[SampleablePulse | _Mapping] | None = ...,
             readout_pulses: _Iterable[SampleablePulse | _Mapping] | None = ...,
         ) -> None: ...

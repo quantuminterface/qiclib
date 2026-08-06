@@ -586,7 +586,7 @@ class Sequencer:
                 result = self.add_calculation(base.adr, QiOp.PLUS, index)
             dst = self.request_register()
             if isinstance(result.value, int):
-                dst.value = self.static_region[result.value // Sequencer.MEMORY_ADDRESS]
+                dst.value = self.static_region[result.value - Sequencer.MEMORY_ADDRESS]
             self.add_load_cmd(dst, result)
             return dst
         else:

@@ -28,6 +28,11 @@ class QicodeConan(ConanFile):
         self.requires("abseil/20250814.0")
         self.requires("protobuf/6.30.1", transitive_headers=True)
 
+    def build_requirements(self):
+        # protoc must come from the build context, otherwise CMake picks up
+        # whatever protoc is on PATH
+        self.tool_requires("protobuf/<host_version>")
+
     def config_options(self):
         if self.settings.os == "Windows":
             del self.options.fPIC

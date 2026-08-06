@@ -5,13 +5,66 @@ This module provides means to interact with the MLIR-based QiCode Compiler,
 import subprocess
 import warnings
 from collections.abc import Sequence
+from dataclasses import dataclass
 from subprocess import PIPE
 from typing import Literal
 
-from typing_extensions import Self
-
 from qicode import CompiledJob, QiJob
 from qicode.proto import CompiledJob as ProtoCompiledJob
+from qicode.proto import SampleablePulse
+
+
+@dataclass
+class Pulse:
+    amplitude: int
+    index: int
+    length: int
+    shape: int
+    hold: bool
+    phase: int
+    shiftPhase: bool
+
+
+class CellCompilation:
+    def __init__(self, cell: ProtoCompiledJob.Cell):
+        self._cell = cell
+
+    def proto(self) -> ProtoCompiledJob.Cell:
+        return self._cell
+
+    @staticmethod
+    def _map_pulses(input_pulses: Sequence[SampleablePulse]) -> list[Pulse]:
+        return [
+            Pulse(
+                proto_pulse.amplitude,
+                proto_pulse.index,
+                proto_pulse.length,
+                proto_pulse.shape,
+                proto_pulse.hold,
+                proto_pulse.phase,
+                proto_pulse.shift_phase,
+            )
+            for proto_pulse in input_pulses
+        ]
+
+    def manipulation_pulses(self) -> list[Pulse]:
+        return CellCompilation._map_pulses(self.proto().manipulation_pulses)
+
+    def readout_pulses(self) -> list[Pulse]:
+        return CellCompilation._map_pulses(self.proto().readout_pulses)
+
+    def recordings(self) -> Sequence[str]:
+        return [recording.bucket for recording in self.proto().recordings]
+
+
+class AssemblyCellCompilation(CellCompilation):
+    def assembly(self) -> Sequence[str]:
+        return self._cell.code.assembly.code
+
+
+class BinaryCellCompilation(CellCompilation):
+    def binary(self) -> Sequence[int]:
+        return self._cell.code.binary.code
 
 
 class Compilation:
@@ -19,37 +72,27 @@ class Compilation:
     The result of a compilation.
     """
 
-    def __init__(self, job: CompiledJob):
+    def __init__(self, job: CompiledJob, output_mode: Literal["binary", "assembly"]):
         self._job = job
-
-    @classmethod
-    def deserialize(cls, value: bytes) -> Self:
-        """
-        Deserialize the result from its proto description
-        """
-        return cls(CompiledJob.from_bytes(value))
-
-    def binary(self) -> dict[int, Sequence[int]]:
-        """
-        Get the binary code.
-        Note: `binary` and `assembly` are mutually exclusive.
-        """
-        cells = self._job.proto().cells
-        return {cell.id: cell.code.binary.code for cell in cells}
-
-    def assembly(self) -> dict[int, Sequence[str]]:
-        """
-        Get assembly code.
-        Note: `binary` and `assembly` are mutually exclusive.
-        """
-        cells = self._job.proto().cells
-        return {cell.id: cell.code.assembly.code for cell in cells}
+        self._output_mode = output_mode
 
     def proto(self) -> ProtoCompiledJob:
         """
         Returns the backing protocol buffer message.
         """
         return self._job.proto()
+
+    def cells(self) -> Sequence[CellCompilation]:
+        if self._output_mode == "binary":
+            return list(map(BinaryCellCompilation, self.proto().cells))
+        else:
+            return list(map(AssemblyCellCompilation, self.proto().cells))
+
+    def cell(self, at: int) -> CellCompilation:
+        if self._output_mode == "binary":
+            return BinaryCellCompilation(self.proto().cells[at])
+        else:
+            return AssemblyCellCompilation(self.proto().cells[at])
 
     @property
     def cell_count(self) -> int:
@@ -133,4 +176,4 @@ class QiCodeCompiler:
             self._executable, serialized_job, output_mode
         )
         compiled_job = deserialize_result(serialized_result)
-        return Compilation(compiled_job)
+        return Compilation(compiled_job, output_mode)
