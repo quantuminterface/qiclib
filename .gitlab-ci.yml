@@ -102,7 +102,7 @@ build_project:
   extends: .base_ruff
   stage: build
   script:
-    - uv build
+    - uv build --all-packages
     - uvx twine check dist/*
   artifacts:
     paths:
@@ -153,7 +153,7 @@ publish_to_pypi:
     - echo "Publishing version $CI_COMMIT_TAG to PyPI"
 
     # Build the wheel and sdist
-    - uv build
+    - uv build --all-packages
 
     # Publish to PyPI
-    - uv publish --token "$PYPI_PUBLISH_TOKEN"
+    - uv publish --token "$PYPI_PUBLISH_TOKEN" --check-url https://pypi.org/simple/
