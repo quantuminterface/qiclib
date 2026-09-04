@@ -23,7 +23,7 @@ unit_tests:
   extends: .base_ruff
   stage: test
   script:
-    - uv run pytest . --junitxml tests_qiclib.xml --cov=qiclib --cov-fail-under=50 --cov-report xml --cov-report term
+    - uv run pytest --junitxml tests_qiclib.xml --cov=qiclib --cov-fail-under=50 --cov-report xml --cov-report term
     - uv run pytest qicode/python --junitxml test_qicode.xml
   coverage: "/TOTAL.+ ([0-9]{1,3}%)/"
   artifacts:

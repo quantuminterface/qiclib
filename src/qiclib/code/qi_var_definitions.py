@@ -535,7 +535,7 @@ class QiCellProperty(QiExpression):
             QiType.PHASE,
             QiType.AMPLITUDE,
         )
-        return self()
+        return float(self())
 
     def accept(self, visitor: QiExpressionVisitor):
         visitor.visit_cell_property(self)

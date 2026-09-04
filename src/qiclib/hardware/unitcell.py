@@ -81,7 +81,14 @@ if TYPE_CHECKING:
 
 
 DataCollection = Literal[
-    "average", "amp_pha", "iqcloud", "raw", "states", "counts", "quantum_jumps"
+    "average",
+    "amp_pha",
+    "iqcloud",
+    "raw",
+    "late_raw",
+    "states",
+    "counts",
+    "quantum_jumps",
 ]
 
 
@@ -345,6 +352,7 @@ class UnitCells(PlatformComponent, Mapping):
             "amp_pha": proto.AMPLITUDE_PHASE,
             "iqcloud": proto.IQCLOUD,
             "raw": proto.RAW_TRACE,
+            "raw_late": proto.LATE_RAW_TRACE,
             "states": proto.STATES,
             "counts": proto.STATE_COUNT,
             "quantum_jumps": proto.QM_JUMPS,
@@ -373,7 +381,12 @@ class UnitCells(PlatformComponent, Mapping):
         results: Iterable[proto.ExperimentResults.SingleCellResults],
     ):
         # Convert the proto messages to appropriate arrays
-        if mode in {proto.AVERAGE, proto.AMPLITUDE_PHASE, proto.RAW_TRACE}:
+        if mode in {
+            proto.AVERAGE,
+            proto.AMPLITUDE_PHASE,
+            proto.RAW_TRACE,
+            proto.LATE_RAW_TRACE,
+        }:
             return [
                 (
                     np.array(single_result.data_double_1, dtype=float),  # I
@@ -434,6 +447,7 @@ class UnitCells(PlatformComponent, Mapping):
             "amp_pha": proto.AMPLITUDE_PHASE,
             "iqcloud": proto.IQCLOUD,
             "raw": proto.RAW_TRACE,
+            "late_raw": proto.LATE_RAW_TRACE,
             "states": proto.STATES,
             "counts": proto.STATE_COUNT,
             "quantum_jumps": proto.QM_JUMPS,

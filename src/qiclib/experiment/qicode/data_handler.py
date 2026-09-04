@@ -65,6 +65,9 @@ class DataHandler(ABC):
             "raw": lambda data_provider, cell_list, _: _RawDataHandler(
                 data_provider, cell_list
             ),
+            "late_raw": lambda data_provider, cell_list, _: _RawDataHandler(
+                data_provider, cell_list
+            ),
             "states": _StateDataHandler,
             "counts": lambda data_provider, cell_list, _: _CountDataHandler(
                 data_provider, cell_list

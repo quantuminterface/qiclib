@@ -18,7 +18,7 @@ import re
 import pytest
 
 import qiclib.packages.utility as util
-from qiclib.code import Play, QiSample, QiTimeVariable
+from qiclib.code import Play, QiPhaseVariable, QiSample, QiTimeVariable
 from qiclib.code.qi_jobs import (
     QiCells,
     QiJob,
@@ -160,3 +160,48 @@ def test_two_pulses_with_parameterized_length_and_same_constant_are_same():
         Play(q[0], QiPulse(frequency=100e6, length=100e-6))
 
     assert len(job.cells[0].manipulation_pulses) == 1
+
+
+def test_pulses_with_different_constant_phases_are_different():
+    with QiJob() as job:
+        q = QiCells(1)
+        Play(q[0], QiPulse(frequency=100e6, length=100e-9, phase=0.0))
+        Play(q[0], QiPulse(frequency=100e6, length=100e-9, phase=1.0))
+
+    assert len(job.cells[0].manipulation_pulses) == 2
+
+
+def test_pulse_with_dynamic_phase_is_not_the_same_as_a_constant_phase():
+    with QiJob() as job:
+        q = QiCells(1)
+        p = QiPhaseVariable()
+        Play(q[0], QiPulse(frequency=100e6, length=100e-9, phase=1.0))
+        Play(q[0], QiPulse(frequency=100e6, length=100e-9, phase=p))
+
+    assert len(job.cells[0].manipulation_pulses) == 2
+
+
+def test_pulses_only_differing_in_a_dynamic_phase_share_a_trigger_set():
+    # A dynamic phase is applied by the phase register, the trigger set stores a phase
+    # of zero for it -- just like for a pulse with a constant phase of zero.
+    with QiJob() as job:
+        q = QiCells(1)
+        p = QiPhaseVariable()
+        r = QiPhaseVariable()
+        Play(q[0], QiPulse(frequency=100e6, length=100e-9, phase=0.0))
+        Play(q[0], QiPulse(frequency=100e6, length=100e-9, phase=p))
+        Play(q[0], QiPulse(frequency=100e6, length=100e-9, phase=r))
+
+    assert len(job.cells[0].manipulation_pulses) == 1
+
+
+def test_trigger_set_phase():
+    with QiJob() as job:
+        q = QiCells(1)
+        p = QiPhaseVariable()
+        Play(q[0], QiPulse(frequency=100e6, length=100e-9, phase=1.5))
+        Play(q[0], QiPulse(frequency=100e6, length=100e-9, phase=p))
+
+    pulses = job.cells[0].manipulation_pulses
+    assert [pulse.has_dynamic_phase for pulse in pulses] == [False, True]
+    assert [pulse.trigger_set_phase for pulse in pulses] == [1.5, 0.0]

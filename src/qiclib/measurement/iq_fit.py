@@ -399,7 +399,7 @@ class IQFit:
         Returns the index and maximum value of a given 2 D array:
         >>> arr = np.array([[0, 2], [1, -1]])
         >>> IQFit._find_maximum_2d(arr)
-        ((0, 1), 2)
+        ((np.int64(0), np.int64(1)), np.int64(2))
 
         :param histo: numpy.ndarray
             A 2-dimensional numpy array

@@ -42,7 +42,6 @@ from qiclib.code.qi_var_definitions import (
     _QiConstValue,
     _QiVariableBase,
 )
-from qiclib.packages.constants import RECORDING_MAX_RAW_SAMPLES
 
 
 def to32bit(x):
@@ -116,11 +115,6 @@ class Simulator:
                 cmd = cmd.recording
 
             if isinstance(cmd, RecordingCommand):
-                if len(self.cell_recordings[cmd.cell]) >= RECORDING_MAX_RAW_SAMPLES:
-                    raise RuntimeError(
-                        f"More than {RECORDING_MAX_RAW_SAMPLES} recordings during job execution."
-                    )
-
                 self.cell_recordings[cmd.cell].append(cmd)
 
             elif isinstance(cmd, DeclareCommand):

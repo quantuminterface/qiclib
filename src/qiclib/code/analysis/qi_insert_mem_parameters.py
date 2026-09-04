@@ -533,7 +533,7 @@ def _insert_pseudo_command_before_for_loop(
     # (offset store) command between this command and the for loop.
     pseudo_command_node = _CFGNode(
         pseudo_command,
-        for_loop.instruction_index,
+        for_loop.instruction_list,
         for_loop.instruction_index,
         command_preds,
     )
@@ -824,6 +824,14 @@ def _get_readout_pulse_property(cmd: QiCommand, property, transform=lambda x: x)
         return IrrelevantCommand
 
 
+def _get_pulse_phase(cmd: QiCommand, pulse_command) -> QiExpression:
+    if not isinstance(cmd, pulse_command):
+        return IrrelevantCommand
+    if cmd.pulse.has_dynamic_phase:
+        return cmd.pulse.phase
+    return _QiConstValue(0.0, QiType.PHASE)
+
+
 def replace_variable_assignment_with_store_commands(job: QiJob):
     configs = (
         InsertMemoryParameterConfiguration(
@@ -852,21 +860,15 @@ def replace_variable_assignment_with_store_commands(job: QiJob):
         ),
         InsertMemoryParameterConfiguration(
             MANIPULATION_PULSE_PHASE_ADDRESS,
-            lambda cmd: _get_manip_pulse_property(cmd, lambda x: x.phase),
+            lambda cmd: _get_pulse_phase(cmd, PlayCommand),
             "_initial_phase",
             QiType.PHASE,
-            anticipated_analysis=lambda config: AnticipatedAmplitudePhaseVisitor(
-                config, PlayCommand, lambda pulse: pulse.phase
-            ),
         ),
         InsertMemoryParameterConfiguration(
             READOUT_PULSE_PHASE_ADDRESS,
-            lambda cmd: _get_readout_pulse_property(cmd, lambda x: x.phase),
+            lambda cmd: _get_pulse_phase(cmd, PlayReadoutCommand),
             "_initial_phase",
             QiType.PHASE,
-            anticipated_analysis=lambda config: AnticipatedAmplitudePhaseVisitor(
-                config, PlayReadoutCommand, lambda pulse: pulse.phase
-            ),
         ),
         InsertMemoryParameterConfiguration(
             MANIPULATION_PULSE_AMPLITUDE_ADDRESS,

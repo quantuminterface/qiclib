@@ -515,14 +515,11 @@ class QiCodeExperiment(BaseExperiment):
             fill = envelope[-1] if hold else 0.0
             envelope = np.append(envelope, [fill] * (4 - len(envelope) % 4))
 
-        # If phase is a constant phase = pulse.phase, otherwise phase = 0
-        if isinstance(pulse.phase, _QiVariableBase):
-            phase = 0
-        else:
-            phase = pulse.phase
-
-        triggerset.load_pulse(  # if const=pulse.phase, dyn =0
-            envelope, hold=hold, shift_phase=pulse.shift_phase, phase=phase
+        triggerset.load_pulse(
+            envelope,
+            hold=hold,
+            shift_phase=pulse.shift_phase,
+            phase=pulse.trigger_set_phase,
         )
 
     def run(self, start_lo: bool = True):
@@ -561,12 +558,6 @@ class QiCodeExperiment(BaseExperiment):
             fill = envelope[-1] if hold else 0.0
             envelope = np.append(envelope, [fill] * (4 - len(envelope) % 4))
 
-        # If phase is a constant phase = pulse.phase, otherwise phase = 0
-        if isinstance(pulse.phase, _QiVariableBase):
-            phase = 0
-        else:
-            phase = pulse.phase
-
         pulseform_i = np.real(envelope)
         pulseform_q = np.imag(envelope)
         if not np.any(pulseform_q):
@@ -579,7 +570,7 @@ class QiCodeExperiment(BaseExperiment):
             ),
             i=pulseform_i,
             q=pulseform_q,
-            phase=phase,
+            phase=pulse.trigger_set_phase,
             offset=0,
             hold=hold,
             shift_phase=pulse.shift_phase,

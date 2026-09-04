@@ -21,11 +21,12 @@ def test_low_amplitude_triggers_warning():
         pulse(1e9)  # 1 GHz sample rate
 
 
-def test_zero_amplitude_triggers_warning():
-    """Test that zero amplitude triggers warning."""
+def test_zero_amplitude_does_not_trigger_warning():
+    """Test that zero amplitude does not trigger a warning."""
     pulse = _QiPulse(length=1e-6, amplitude=0.0)
 
-    with pytest.warns(UserWarning, match="below the minimum representable value"):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
         pulse(1e9)
 
 

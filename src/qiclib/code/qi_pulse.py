@@ -124,7 +124,7 @@ class _QiPulse:
         length: float | QiExpression | str,
         shape: Shape | None = None,
         amplitude: float | _QiVariableBase | QiExpression | None = None,
-        phase: float | _QiVariableBase | None = None,
+        phase: float | QiExpression | None = None,
         frequency: float | QiExpression | None = None,
         hold=False,
     ):
@@ -198,7 +198,7 @@ class _QiPulse:
     def cw(
         cls,
         amplitude: float | _QiVariableBase | QiExpression = 1.0,
-        phase: float | _QiVariableBase = 0.0,
+        phase: float | QiExpression = 0.0,
         frequency: float | QiExpression | None = None,
     ) -> _QiPulse:
         """
@@ -232,6 +232,17 @@ class _QiPulse:
         else:
             return self.amplitude == other.amplitude
 
+    def _are_same_phase(self, other: _QiPulse) -> bool:
+        if self.has_dynamic_phase and other.has_dynamic_phase:
+            return True
+        if self.has_dynamic_phase or other.has_dynamic_phase:
+            # A pulse with a constant phase can still share the trigger set as long as
+            # that phase is zero, because that is what a dynamic phase stores there.
+            constant = other if self.has_dynamic_phase else self
+            return _equal(constant.phase, 0.0)
+
+        return _equal(self.phase, other.phase)
+
     def __eq__(self, o: object) -> bool:
         if not isinstance(o, _QiPulse):
             return False
@@ -243,7 +254,8 @@ class _QiPulse:
             and equal_amplitude
             and (self.hold == o.hold)
             and (self.shape == o.shape)
-            and (self.phase == o.phase)
+            and (self.shift_phase == o.shift_phase)
+            and self._are_same_phase(o)
             and (
                 self.frequency._equal_syntax(o.frequency)
                 if self.frequency is not None and o.frequency is not None
@@ -308,7 +320,8 @@ class _QiPulse:
         if self.mode != "off" and len(envelope) > 0:
             max_amplitude: float = np.max(np.abs(envelope))
             min_representable_amplitude = 1.0 / const.CONTROLLER_AMPLITUDE_MAX_VALUE
-            if max_amplitude < min_representable_amplitude:
+            # A pulse with 0 amplitude is fine and should not trigger a warning
+            if max_amplitude > 0 and max_amplitude < min_representable_amplitude:
                 import warnings
 
                 warnings.warn(
@@ -330,7 +343,24 @@ class _QiPulse:
 
     @property
     def is_variable_length(self):
-        return isinstance(self._length, QiExpression) and self._length.is_dynamic()
+        return is_dynamic(self._length)
+
+    @property
+    def has_dynamic_phase(self) -> bool:
+        return is_dynamic(self.phase)
+
+    @property
+    def trigger_set_phase(self) -> float:
+        """The phase that is stored in the trigger set of the signal generator, in rad."""
+        from .qi_var_definitions import QiCellProperty, _QiConstValue
+
+        if self.has_dynamic_phase:
+            return 0.0
+        if isinstance(self.phase, _QiConstValue | QiCellProperty):
+            return self.phase.float_value
+
+        assert not isinstance(self.phase, QiExpression)
+        return float(self.phase)
 
     def _stringify_args(self) -> str:
         """Determines non-default args to explicitly stringify"""
@@ -355,6 +385,10 @@ class _QiPulse:
 
     def _stringify(self) -> str:
         return f"QiPulse({self._stringify_args()})"
+
+
+def is_dynamic(prop) -> bool:
+    return isinstance(prop, QiExpression) and prop.is_dynamic()
 
 
 def _equal(a, b):

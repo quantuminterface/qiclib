@@ -104,7 +104,10 @@ received trigger value, see :class:`RecordingTrigger` for details.
 
 from __future__ import annotations
 
+import itertools
 import warnings
+from collections.abc import Iterable, Iterator, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from numbers import Number
 from typing import Any
@@ -120,7 +123,50 @@ from qiclib.hardware.platform_component import (
     platform_attribute,
     platform_attribute_collector,
 )
+from qiclib.logical_expr import (
+    LConst,
+    Lexpr,
+    LVar,
+    LVec,
+    always,
+)
 from qiclib.packages.servicehub import ServiceHubCall
+from qiclib.state_estimation import LinearDiscriminator, shade_region
+
+_RAW_WEIGHT_ONE = 0x7FFF
+"""The raw 16-bit integration weight representing a value of one."""
+
+_RAW_WEIGHT_IQ = np.dtype([("i", "<i2"), ("q", "<i2")])
+"""Memory layout of a raw integration weight sample: interleaved 16-bit I/Q values."""
+
+
+def _to_raw_iq(weights: Iterable[complex]) -> Iterator[tuple[int, int]]:
+    """Converts raw integration weights into 16-bit integer I/Q pairs.
+
+    :param weights:
+        iterable of real or complex samples, or of `(I, Q)` pairs. Floats are
+        accepted as long as they represent an exact integer.
+
+    :raises ValueError:
+        if a component is not integer valued or does not fit into 16 bits.
+    """
+    for index, weight in enumerate(weights):
+        if isinstance(weight, (tuple, list)):
+            i, q = weight
+        else:
+            i, q = weight.real, weight.imag
+        for value in (i, q):
+            if not float(value).is_integer():
+                raise ValueError(
+                    f"Raw weights need to be integer values but sample {index} is "
+                    f"{i} + {q}j."
+                )
+            if not -0x8000 <= value <= _RAW_WEIGHT_ONE:
+                raise ValueError(
+                    f"Raw weights need to fit into 16 bits but sample {index} is "
+                    f"{i} + {q}j."
+                )
+        yield int(i), int(q)
 
 
 class RecordingTrigger(Enum):
@@ -165,6 +211,421 @@ class RecordingTrigger(Enum):
 
     NCO_SYNC = 15
     """Synchronize the internal reference oscillation by resetting its phase."""
+
+
+NUMBER_DISCRIMINATORS = 4
+"""The number of linear discriminators the signal recorder provides."""
+
+
+NUMBER_FSM_STATES = NUMBER_DISCRIMINATORS + 2
+"""The number of internal states the state estimation FSM can be in."""
+
+FSM_STATE_WIDTH = (NUMBER_FSM_STATES - 1).bit_length()
+"""The number of bits the internal FSM state is stored in on the hardware."""
+
+DiscriminatorResult = LVec.with_width("d", NUMBER_DISCRIMINATORS)
+StateVar = LVec.with_width("st", FSM_STATE_WIDTH)
+
+FSM_TABLE_DEPTH = 2 ** (NUMBER_DISCRIMINATORS + FSM_STATE_WIDTH)
+"""The number of rows of each of the two FSM transition tables on the hardware."""
+
+
+MAX_NUMBER_STATES = 4
+
+QUBIT_STATE_WIDTH = MAX_NUMBER_STATES.bit_length()
+"""The number of bits a reported qubit state is stored in on the hardware.
+
+`MAX_NUMBER_STATES` itself is a valid value, as it denotes `QubitState.INVALID`.
+"""
+
+STATE_COLORS = ("tab:blue", "tab:red", "tab:green", "tab:purple")
+"""The default colors used to shade the areas of the qubit states |0>, |1>, ..."""
+
+
+class QubitState(LConst):
+    def __init__(self, number: int):
+        super().__init__(LConst.from_int(number, QUBIT_STATE_WIDTH).values)
+
+    INVALID: QubitState
+    ZERO: QubitState
+    ONE: QubitState
+
+    @classmethod
+    def higher(cls, number):
+        assert 0 <= number < MAX_NUMBER_STATES
+        return cls(number)
+
+
+QubitState.INVALID = QubitState(MAX_NUMBER_STATES)
+QubitState.ZERO = QubitState(0)
+QubitState.ONE = QubitState(1)
+
+
+def _fsm_variables(state: LConst, discriminator_results: LConst) -> dict[LVar, bool]:
+    """Binds `StateVar` and `DiscriminatorResult` for one row of the FSM tables.
+
+    Bits that are not covered by the given values are assumed to be `False`, so fewer
+    discriminator results than the hardware provides can be passed.
+    """
+    if len(state) > len(StateVar):
+        raise ValueError(
+            f"The FSM state is {len(StateVar)} bits wide, "
+            f"but {len(state)} bits were given."
+        )
+    if len(discriminator_results) > len(DiscriminatorResult):
+        raise ValueError(
+            f"At most {len(DiscriminatorResult)} discriminator results are "
+            f"supported, but {len(discriminator_results)} were given."
+        )
+    variables = {
+        StateVar[bit]: (state[bit] if bit < len(state) else False)
+        for bit in range(len(StateVar))
+    }
+    variables |= {
+        DiscriminatorResult[bit]: (
+            discriminator_results[bit] if bit < len(discriminator_results) else False
+        )
+        for bit in range(len(DiscriminatorResult))
+    }
+    return variables
+
+
+def _encode_fsm_matrix(expression: Lexpr, value_width: int, name: str) -> bytes:
+    """Evaluates `expression` for every row of an FSM transition table.
+
+    :param expression:
+        the expression to tabulate. It may only depend on `StateVar` and
+        `DiscriminatorResult`.
+    :param value_width:
+        the number of bits the hardware stores each entry in.
+    :param name:
+        the name of the expression, only used in error messages.
+
+    :return:
+        the table as `FSM_TABLE_DEPTH` bytes.
+    """
+    unknown = (
+        expression.variables() - StateVar.variables() - DiscriminatorResult.variables()
+    )
+    if unknown:
+        raise ValueError(
+            f"{name} depends on {sorted(variable.name for variable in unknown)}, "
+            f"which are neither FSM state nor discriminator result variables."
+        )
+
+    table = bytearray(FSM_TABLE_DEPTH)
+    for row in range(FSM_TABLE_DEPTH):
+        results = LConst.from_int(
+            row % 2 ** len(DiscriminatorResult), len(DiscriminatorResult)
+        )
+        print(f"  results=0x{int(results):x}")
+        state = LConst.from_int(row >> len(DiscriminatorResult), len(StateVar))
+        print(f"  state=0x{int(state):x}")
+        value = int(expression.eval(_fsm_variables(state, results)))
+        if value >= 2**value_width:
+            raise ValueError(
+                f"{name} returns {value} for FSM state {int(state)} and discriminator "
+                f"results {int(results)}, which does not fit into {value_width} bits."
+            )
+        print(f"    row 0x{row:x}: 0x{value:x}")
+        table[row] = value
+    return bytes(table)
+
+
+@dataclass
+class StateConfig:
+    @dataclass
+    class FsmConfig:
+        # dict mapping (state, input) -> next state
+        next_state_fn: Lexpr
+        # dict mapping (state, input) -> output
+        output_state_fn: Lexpr
+
+        def next_state_matrix(self) -> bytes:
+            """Returns `next_state_fn` in the representation used by the hardware"""
+            return _encode_fsm_matrix(
+                self.next_state_fn, len(StateVar), "next_state_fn"
+            )
+
+        def output_state_matrix(self) -> bytes:
+            """Returns `output_state_fn` in the representation used by the hardware"""
+            return _encode_fsm_matrix(
+                self.output_state_fn, QUBIT_STATE_WIDTH, "output_state_fn"
+            )
+
+        @classmethod
+        def two_states(cls, invert: bool = False):
+            """
+            The simplest FSM config.
+            - There are no states and no state transition; the output is a combinational funciton of the input
+            - Only considers one discriminator
+            - 0 maps to state 0, 1 maps to state 1
+            - other states aren't produced
+            """
+
+            return cls(
+                # No states involved in 2-state discriminator -> default next state matrix (maps all inputs to state 0)
+                next_state_fn=always(False),
+                output_state_fn=~DiscriminatorResult[0]
+                if invert
+                else DiscriminatorResult[0],
+            )
+
+        @classmethod
+        def latching_two_states(cls):
+            """
+            Latching config where an ambiguous state is assigned the last received state.
+            FSM has two states, 0 and 1 that store the last state. Initial state is 0.
+            Two discriminators are expected to produce
+            - 00 | 11 -> neither detected a unique state (latching case; output is last state)
+            - 01 -> point is state |0> (output is 0; state 0)
+            - 10 -> point is state |1> (output is 1; state 1)
+            """
+            # As wide as the FSM state, otherwise a single bit would be broadcast
+            # over all bits of the next state.
+            PREVIOUS_ZERO = LConst.from_int(0, len(StateVar))
+            PREVIOUS_ONE = LConst.from_int(1, len(StateVar))
+
+            return cls(
+                next_state_fn=DiscriminatorResult.when(
+                    {
+                        0b0001: PREVIOUS_ZERO,
+                        0b0101: PREVIOUS_ZERO,
+                        0b1001: PREVIOUS_ZERO,
+                        0b1101: PREVIOUS_ZERO,
+                        0b0010: PREVIOUS_ONE,
+                        0b0110: PREVIOUS_ONE,
+                        0b1010: PREVIOUS_ONE,
+                        0b1110: PREVIOUS_ONE,
+                    },
+                    default=StateVar,
+                ),
+                output_state_fn=DiscriminatorResult.when(
+                    {
+                        0b0001: QubitState.ZERO,
+                        0b0101: QubitState.ZERO,
+                        0b1001: QubitState.ZERO,
+                        0b1101: QubitState.ZERO,
+                        0b0010: QubitState.ONE,
+                        0b0110: QubitState.ONE,
+                        0b1010: QubitState.ONE,
+                        0b1110: QubitState.ONE,
+                    },
+                    default=StateVar.when(
+                        {PREVIOUS_ZERO: QubitState.ZERO, PREVIOUS_ONE: QubitState.ONE},
+                        default=QubitState.ZERO,
+                    ),
+                ),
+            )
+
+        @classmethod
+        def three_states(cls):
+            """
+            Discriminates between the three states |0>, |1> and |2> using one
+            discriminator per pair of states (one-vs-one).
+
+            There are no states and no state transition; the output is a combinational
+            function of the input. The three discriminators are expected to be, in
+            this order:
+
+            - discriminator 0 separates |0> from |1>, e.g.
+              `LinearDiscriminator.estimate(state_0, state_1)`
+            - discriminator 1 separates |0> from |2>
+            - discriminator 2 separates |1> from |2>
+
+            i.e. each of them reports `1` for the higher of the two states it was
+            built for. The reported state is then the one that wins both of its
+            pairwise comparisons (a majority vote over the three comparisons)::
+
+                | d2 | d1 | d0 | output    |
+                | -- | -- | -- | --------- |
+                |  0 |  0 |  0 | |0>       |
+                |  0 |  0 |  1 | |1>       |
+                |  0 |  1 |  0 | invalid   |
+                |  0 |  1 |  1 | |1>       |
+                |  1 |  0 |  0 | |0>       |
+                |  1 |  0 |  1 | invalid   |
+                |  1 |  1 |  0 | |2>       |
+                |  1 |  1 |  1 | |2>       |
+
+            The two remaining combinations are cyclic ("|1> beats |0>, |2> beats |1>,
+            |0> beats |2>") and thus have no winner, so they are reported as
+            `QubitState.INVALID`. If the discriminators are the perpendicular
+            bisectors between the three state centers, as `LinearDiscriminator.estimate`
+            produces them, the three separation lines meet in a single point and
+            neither of these two combinations can occur.
+            """
+            return cls(
+                next_state_fn=always(False),
+                output_state_fn=DiscriminatorResult.when(
+                    {
+                        0b000: QubitState.ZERO,
+                        0b001: QubitState.ONE,
+                        0b011: QubitState.ONE,
+                        0b100: QubitState.ZERO,
+                        0b110: QubitState.higher(2),
+                        0b111: QubitState.higher(2),
+                    },
+                    default=QubitState.INVALID,
+                ),
+            )
+
+    disciminator_configs: list[LinearDiscriminator]
+    fsm_config: FsmConfig
+
+    @classmethod
+    def linear_2state(cls, disc: LinearDiscriminator, invert: bool = False):
+        """
+        Linearly discriminates between two states using the provided discriminator
+        """
+        return cls(
+            disciminator_configs=[disc],
+            fsm_config=StateConfig.FsmConfig.two_states(invert),
+        )
+
+    @classmethod
+    def linear_3states(cls, discs: list[LinearDiscriminator]):
+        """
+        Linearly discriminates between the three states |0>, |1> and |2> using one
+        discriminator per pair of states, see `FsmConfig.three_states` for the
+        expected order of the discriminators.
+        """
+        return cls(
+            disciminator_configs=discs,
+            fsm_config=StateConfig.FsmConfig.three_states(),
+        )
+
+    @classmethod
+    def latching_2state(cls, left: LinearDiscriminator, right: LinearDiscriminator):
+        """
+        Discriminates between two states using two discriminators with overlap.
+        If both disagree (i.e., neither can conclusively tell state 0 from 1 apart),
+        use the last detected state.
+        """
+        return cls(
+            disciminator_configs=[left, right],
+            fsm_config=StateConfig.FsmConfig.latching_two_states(),
+        )
+
+    def output_state(self, state: LConst, discriminator_results: LConst) -> QubitState:
+        """
+        Evaluates `FsmConfig.output_state_fn` for a given FSM state and discriminator
+        results, i.e. returns the qubit state that is reported for this combination.
+
+        The returned value is the qubit state as a number, so it can also be one of the
+        higher states or `QubitState.INVALID`, see `QubitState`.
+
+        :param state:
+            the current state of the FSM.
+        :param discriminator_results:
+            the results of the discriminators, starting at the first one. Results of
+            discriminators that are not given are assumed to be `False`.
+        """
+        variables = _fsm_variables(state, discriminator_results)
+        return QubitState(int(self.fsm_config.output_state_fn.eval(variables)))
+
+    def plot(
+        self,
+        ax=None,
+        xlim: tuple[float, float] | None = None,
+        ylim: tuple[float, float] | None = None,
+        band_width: float = 0.02,
+        state: int = 0,
+        shade: bool = True,
+        shade_colors: Sequence[str] = STATE_COLORS,
+        invalid_color: str = "tab:gray",
+        shade_alpha: float = 0.15,
+        **kwargs,
+    ):
+        """
+        Draws all linear discriminators of this configuration onto a matplotlib axis,
+        shading the are where each is active based on the previous `state`
+
+        :param ax:
+            the `matplotlib.axes.Axes` to draw on. Defaults to the current axis
+            (`matplotlib.pyplot.gca()`), which creates a new figure if none exists.
+        :param xlim:
+            the I range to draw within. Defaults to the current limits of `ax`.
+        :param ylim:
+            the Q range to draw within. Defaults to the current limits of `ax`.
+        :param band_width:
+            the width of the hatched bands as a fraction of the plotted area.
+        :param state:
+            the FSM state to shade the reported states for. Defaults to state 0, the
+            initial state of the FSM.
+        :param shade:
+            whether to shade the areas of the reported states at all.
+        :param shade_colors:
+            the colors used for the areas of the qubit states, starting at
+            :math:`|0\\rangle`.
+        :param invalid_color:
+            the color used for areas that report a state outside of `shade_colors`,
+            e.g. `QubitState.INVALID`.
+        :param shade_alpha:
+            the opacity of the shaded areas.
+        :param kwargs:
+            further keyword arguments passed on to `LinearDiscriminator.plot`.
+
+        :return:
+            the `matplotlib.axes.Axes` that was drawn on.
+        """
+        import matplotlib.pyplot as plt
+
+        if ax is None:
+            ax = plt.gca()
+        if xlim is None:
+            xlim = ax.get_xlim()
+        if ylim is None:
+            ylim = ax.get_ylim()
+
+        if shade and self.disciminator_configs:
+            # Only a latching configuration reports different states for the same input,
+            # so the FSM state is only worth mentioning if the output depends on it.
+            latching = bool(
+                self.fsm_config.output_state_fn.variables() & StateVar.variables()
+            )
+            labeled: set[int] = set()
+            for results in itertools.product(
+                [False, True], repeat=len(self.disciminator_configs)
+            ):
+                output = int(
+                    self.output_state(
+                        LConst.from_int(state, len(StateVar)),
+                        LConst.from_iterable(results),
+                    )
+                )
+                if output < len(shade_colors):
+                    color = shade_colors[output]
+                    label = rf"$|{output}\rangle$"
+                else:
+                    color = invalid_color
+                    label = f"invalid ({output})"
+                if latching:
+                    label += f" (FSM state {state})"
+                polygons = shade_region(
+                    self.disciminator_configs,
+                    results,
+                    ax=ax,
+                    xlim=xlim,
+                    ylim=ylim,
+                    label=None if output in labeled else label,
+                    color=color,
+                    alpha=shade_alpha,
+                )
+                if polygons:
+                    # Only the first visible region of each state gets a legend entry.
+                    labeled.add(output)
+
+        for index, discriminator in enumerate(self.disciminator_configs):
+            discriminator.plot(
+                ax,
+                xlim=xlim,
+                ylim=ylim,
+                label=f"discriminator {index}",
+                band_width=band_width,
+                **kwargs,
+            )
+        return ax
 
 
 @platform_attribute_collector
@@ -611,9 +1072,17 @@ class Recording(PlatformComponent):
         and the resulting coefficients can be chosen so that the relative errors when
         rounding become small.
 
+        The signal recorder provides `NUMBER_DISCRIMINATORS` discriminators, of which
+        this property only addresses the first one. Use
+        `Recording.get_discriminator` and `Recording.set_discriminator` to reach the
+        others, or `Recording.set_state_config` to configure all of them together with
+        the state estimation FSM.
+
         .. todo:: Ilustration of qubit state estimation
         """
-        config = self._stub.GetStateConfig(self._component)
+        config = self._stub.GetStateConfig(
+            proto.DiscriminatorIndex(index=self._component, discriminator_index=0)
+        )
         return config.value_ai, config.value_aq, config.value_b
 
     @state_config.setter
@@ -629,6 +1098,7 @@ class Recording(PlatformComponent):
                 value_ai=int(state_config[0]),
                 value_aq=int(state_config[1]),
                 value_b=int(state_config[2]),
+                discriminator_index=0,
             )
         )
 
@@ -655,6 +1125,82 @@ class Recording(PlatformComponent):
         See `Recording.state_config` for more details on the state discrimination.
         """
         return self.state_config[2]
+
+    def _check_discriminator_index(self, index: int):
+        if not 0 <= index < NUMBER_DISCRIMINATORS:
+            raise ValueError(
+                f"The signal recorder has {NUMBER_DISCRIMINATORS} discriminators, "
+                f"but the discriminator index is {index}."
+            )
+
+    @ServiceHubCall
+    def get_discriminator(self, index: int = 0) -> LinearDiscriminator:
+        self._check_discriminator_index(index)
+        config = self._stub.GetStateConfig(
+            proto.DiscriminatorIndex(index=self._component, discriminator_index=index)
+        )
+        return LinearDiscriminator.from_platform_data(
+            (config.value_ai, config.value_aq, config.value_b)
+        )
+
+    @ServiceHubCall
+    def set_discriminator(self, index: int, discriminator: LinearDiscriminator):
+        self._check_discriminator_index(index)
+        a_i, a_q, b = discriminator.platform_data()
+        self._stub.SetStateConfig(
+            proto.StateConfig(
+                index=self._component,
+                value_ai=round(a_i),
+                value_aq=round(a_q),
+                value_b=round(b),
+                discriminator_index=index,
+            )
+        )
+
+    @ServiceHubCall
+    def set_fsm_config(self, fsm_config: StateConfig.FsmConfig):
+        """Configures the finite state machine of the state estimation.
+
+        This only configures the FSM. The discriminators that produce its input are set
+        via `Recording.set_discriminator`, or use `Recording.set_state_config` to apply
+        both at once.
+
+        :param fsm_config:
+            the FSM configuration to apply, e.g. `StateConfig.FsmConfig.two_states()`.
+        """
+        self._stub.SetStateFsm(
+            proto.StateFsmConf(
+                index=self._component,
+                next_state_matrix=fsm_config.next_state_matrix(),
+                out_state_matrix=fsm_config.output_state_matrix(),
+            )
+        )
+
+    def set_state_config(self, config: StateConfig):
+        """Applies a complete state discrimination configuration to the QiController.
+
+        This writes the linear discriminators of `config` to the first of the
+        `NUMBER_DISCRIMINATORS` discriminators, in the order in which they are listed,
+        and then configures the state estimation FSM from `config.fsm_config`
+
+        .. code-block:: python
+
+            config = StateConfig.linear_2state(
+                LinearDiscriminator.estimate(state_0, state_1)
+            )
+            qic.cell[0].recording.set_state_config(config)
+
+        :param config:
+            the state discrimination configuration to apply.
+        """
+        if len(config.disciminator_configs) > NUMBER_DISCRIMINATORS:
+            raise ValueError(
+                f"The signal recorder has {NUMBER_DISCRIMINATORS} discriminators, but "
+                f"{len(config.disciminator_configs)} were given."
+            )
+        for index, discriminator in enumerate(config.disciminator_configs):
+            self.set_discriminator(index, discriminator)
+        self.set_fsm_config(config.fsm_config)
 
     @ServiceHubCall
     def get_averaged_result(self, verify: bool = True) -> tuple[int, int]:
@@ -802,3 +1348,60 @@ class Recording(PlatformComponent):
             "reference_frequency": self.reference_frequency,
             "state_config": self.state_config,
         }
+
+    def set_integration_boxcar(self):
+        self._stub.SetIntegrationWeights(
+            proto.IntegrationWeights(index=self._component, boxcar=True)
+        )
+
+    def set_integration_weights(self, weights: Iterable[complex]):
+        """Sets the integration weights to the given normalized complex weights.
+
+        :param weights:
+            iterable of complex or real samples used for integrating the raw data stream.
+        """
+        samples = np.fromiter(weights, dtype=np.complex128)
+        self._stub.SetIntegrationWeights(
+            proto.IntegrationWeights(
+                index=self._component,
+                weights_normalized=proto.IntegrationWeights.WeightsNormalized(
+                    # I/Q interleaving is exactly the memory layout of complex128
+                    samples=samples.view(np.float64)
+                ),
+            )
+        )
+
+    def set_integration_weights_raw(self, weights: Iterable[complex]):
+        """Sets the integration weights to the given raw weights in hardware format.
+
+        :param weights:
+            iterable of complex or real samples used for integrating the raw data
+            stream, given as `(I, Q)` pairs or as complex/real numbers.
+            Both components have to be integer valued and to fit into 16 bits. Floats
+            are accepted as long as they are an exact integer.
+
+        :raises ValueError:
+            if a component is not integer valued or does not fit into 16 bits, or
+            if the absolute value of a complex sample exceeds an absolute value of one
+            using 16-bit quntization.
+        """
+        samples = np.fromiter(_to_raw_iq(weights), dtype=_RAW_WEIGHT_IQ)
+        # int64 to prevent the squares from overflowing
+        i = samples["i"].astype(np.int64)
+        q = samples["q"].astype(np.int64)
+        magnitude_sq = i**2 + q**2
+        if np.any(magnitude_sq > _RAW_WEIGHT_ONE**2):
+            index = int(np.argmax(magnitude_sq))
+            raise ValueError(
+                f"Raw weights need to fulfill abs(I + 1j * Q) <= 1 (= {_RAW_WEIGHT_ONE}) "
+                f"but sample {index} is {i[index]} + {q[index]}j with an "
+                f"absolute value of {np.sqrt(magnitude_sq[index]) / _RAW_WEIGHT_ONE}."
+            )
+        self._stub.SetIntegrationWeights(
+            proto.IntegrationWeights(
+                index=self._component,
+                weights_raw=proto.IntegrationWeights.WeightsRaw(
+                    samples=samples.tobytes()
+                ),
+            )
+        )

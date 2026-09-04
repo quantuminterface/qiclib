@@ -24,7 +24,7 @@ from inline_snapshot import snapshot
 
 import qiclib.packages.utility as util
 import qicode.proto
-from qiclib.code import QiIntVariable, While
+from qiclib.code import QiIntVariable, QiPhaseVariable, While
 from qiclib.code.qi_command import (
     AssignCommand,
     ForRangeCommand,
@@ -1733,6 +1733,43 @@ def test_frequency_swept_spectroscopy():
             "addi r3, r3, 0x937",  # ...
             "add r1, r1, r3",  # Increment address
             "j -0xb",  # Jump to start
+            "end",
+        ]
+    )
+
+
+def test_amplitude_phase_sweep():
+    with QiJob() as job:
+        cells = QiCells(1)
+        for q in cells:
+            a = QiAmplitudeVariable()
+            p = QiPhaseVariable()
+            with ForRange(a, 0, 0.5, 0.01):
+                with ForRange(p, 0, 2 * math.pi, 0.01):
+                    PlayReadout(q, QiPulse(amplitude=a, length=1e-6, frequency=0))
+                    Recording(q, duration=1e-6, offset=52e-9, save_to="result")
+
+    assert job.get_assembly() == snapshot(
+        [
+            "tr 0x0, 0x0, 0x0, 0x0, 0x0, 0x0",
+            "lui r3, 0x4000",
+            "addi r3, r3, 0xfff",
+            "addi r1, r0, 0x0",
+            "bge r1, r3, 0xf",
+            "sll r4, r1, 0x10",
+            "or r5, r1, r4",
+            "lui r4, 0x4000",
+            "addi r4, r4, 0x4",
+            "sw r5, 0(r4)",
+            "lui r4, 0x10000",
+            "addi r2, r0, 0x0",
+            "bge r2, r4, 0x5",
+            "tr 0x1, 0x1, 0x0, 0x0, 0x0, 0x0",
+            "wti 0xfa",
+            "addi r2, r2, 0x68",
+            "j -0x4",
+            "addi r1, r1, 0x147",
+            "j -0xe",
             "end",
         ]
     )

@@ -13,6 +13,7 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+import math
 import re
 
 import pytest
@@ -904,5 +905,62 @@ class TestPlayFrequency:
             "addi r3, r3, 0x8be",
             "add r1, r1, r3",
             "j -0x9",
+            "end",
+        ]
+
+    def test_constant_phase_resets_the_phase_register(self):
+        # The phase register is added on top of the phase stored in the trigger set of
+        # a pulse.  A pulse with a constant phase, therefore, needs the register to be
+        # reset, otherwise it silently inherits the phase of the preceding pulse.
+        with QiJob() as job:
+            q = QiCells(1)
+            p = QiPhaseVariable()
+            with ForRange(p, 0.0, 2 * math.pi, math.pi / 2):
+                Play(q[0], QiPulse(length=100e-9, phase=0.0))
+                Play(q[0], QiPulse(length=100e-9, phase=p))
+
+        assert job.get_assembly() == [
+            "tr 0x0, 0x0, 0x0, 0x0, 0x0, 0x0",
+            # Reset the phase register for the first (constant phase) pulse
+            "lui r1, 0x6000",
+            "addi r1, r1, 0xc",
+            "sw r0, 0(r1)",
+            # Initialize r2 to 2 * pi (loop end) and r1 to 0 (loop start)
+            "lui r2, 0x10000",
+            "addi r1, r0, 0x0",
+            "bge r1, r2, 0xe",
+            # First pulse, phase register is already zero here
+            "tr 0x0, 0x0, 0x1, 0x0, 0x0, 0x0",
+            "wti 0x18",
+            # Store the loop variable in the phase register
+            "lui r3, 0x6000",
+            "addi r3, r3, 0xc",
+            "sw r1, 0(r3)",
+            # Second pulse, shares the trigger set with the first one
+            "tr 0x0, 0x0, 0x1, 0x0, 0x0, 0x0",
+            "wti 0x18",
+            # Reset the phase register for the first pulse of the next iteration
+            "lui r3, 0x6000",
+            "addi r3, r3, 0xc",
+            "sw r0, 0(r3)",
+            # Loop increment
+            "lui r3, 0x4000",
+            "add r1, r1, r3",
+            "j -0xd",
+            "end",
+        ]
+
+    def test_only_constant_phases_need_no_store(self):
+        with QiJob() as job:
+            q = QiCells(1)
+            Play(q[0], QiPulse(length=100e-9, phase=0.0))
+            Play(q[0], QiPulse(length=100e-9, phase=math.pi / 2))
+
+        assert job.get_assembly() == [
+            "tr 0x0, 0x0, 0x0, 0x0, 0x0, 0x0",
+            "tr 0x0, 0x0, 0x1, 0x0, 0x0, 0x0",
+            "wti 0x18",
+            "tr 0x0, 0x0, 0x2, 0x0, 0x0, 0x0",
+            "wti 0x18",
             "end",
         ]

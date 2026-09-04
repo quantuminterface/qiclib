@@ -1362,12 +1362,6 @@ class QiJob(qicode.QiJob):
         job_id = exp.submit()
         return SubmittedJob.from_experiment(job_id, exp)
 
-    def run_with_data_callback(self, on_new_data: Callable[[dict], None]):
-        pass
-
-    def run_streamed(self):
-        pass
-
     def set_custom_data_processing(
         self,
         file: str,

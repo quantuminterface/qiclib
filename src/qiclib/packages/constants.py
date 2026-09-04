@@ -30,6 +30,3 @@ CONTROLLER_SAMPLE_FREQUENCY_IN_HZ = (
 )
 
 CONTROLLER_AMPLITUDE_MAX_VALUE = (1 << 16) - 1
-
-# 0x1000 Memory size, 2 bytes per value and 2 values (I/Q) per sample
-RECORDING_MAX_RAW_SAMPLES = int(0x1000 / (2 * 2))

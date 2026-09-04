@@ -103,8 +103,14 @@ source = "vcs"
 [tool.hatch.build.hooks.vcs]
 version-file = "src/qiclib/_version.py"
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+[tool.pytest]
+testpaths = [
+    "tests",
+    "src/qiclib/logical_expr.py",
+    "src/qiclib/measurement/iq_fit.py",
+    "src/qiclib/state_estimation.py",
+]
+addopts = ["--doctest-modules"]
 
 [tool.uv]
 default-groups = ["dev", "jupyter"]
@@ -116,7 +122,7 @@ members = ["qicode/python"]
 qicode = { workspace = true }
 
 [tool.inline-snapshot]
-format-command="ruff format --stdin-filename {filename}"
+format-command = "ruff format --stdin-filename {filename}"
 
 [dependency-groups]
 dev = [

@@ -3112,7 +3112,7 @@ jupyter = [{ name = "jupyterlab", specifier = ">=4.3.3" }]
 
 [[package]]
 name = "qicode"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "qicode/python" }
 dependencies = [
     { name = "protobuf" },
